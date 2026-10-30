@@ -7,6 +7,7 @@
       workspace: "工作区",
       myShares: "我的分享",
       account: "个人中心",
+      accountTabs: "个人中心功能",
       users: "用户管理",
       settings: "设置",
       newWorkspace: "新建工作区",
@@ -27,6 +28,13 @@
       logout: "退出登录",
       language: "语言",
       theme: "切换主题",
+      accent: "强调色",
+      accentBlue: "蓝色",
+      accentGreen: "绿色",
+      accentPurple: "紫色",
+      accentRed: "红色",
+      accentOrange: "橙色",
+      accentTeal: "青色",
       dark: "深色",
       light: "浅色",
       search: "按文件名前缀搜索",
@@ -49,6 +57,7 @@
       delete: "删除",
       preview: "预览",
       fullscreen: "全屏预览",
+      fullscreenUnavailable: "浏览器暂不支持全屏，请继续使用普通预览。",
       close: "关闭",
       cancel: "取消",
       confirm: "确认",
@@ -67,8 +76,8 @@
       required: "带 * 的字段为必填项。",
       requiredError: "请填写此字段。",
       emailError: "请输入有效的邮箱地址，例如 name@example.com。",
-      passwordHint: "至少 10 个字符。",
-      passwordError: "密码至少需要 10 个字符。",
+      passwordHint: "至少 6 个字符。",
+      passwordError: "密码至少需要 6 个字符。",
       nameHint: "名称不能包含 / 或 \\，不能为 . 或 ..。",
       htmlHint: "文件名必须以 .html 或 .htm 结尾。",
       content: "HTML 源码",
@@ -97,6 +106,7 @@
         "一个空间，连接你的页面、想法和团队。轻松管理 HTML 原型，安全分享每一处细节。",
       authEyebrow: "从灵感到体验",
       authFooter: "为高效协作而设计。",
+      poweredBy: "Powered by babaShare",
       retry: "重试",
       shareTitle: "分享当前文件夹",
       shareHint: "任何获得链接的人都可只读浏览此文件夹及其子文件。",
@@ -108,6 +118,9 @@
       shareCreated: "分享链接已创建",
       copyLink: "复制链接",
       copied: "链接已复制",
+      copying: "复制中…",
+      copySuccess: "已复制",
+      copyRetry: "复制失败，重试",
       copyFailed: "无法自动复制，请选择链接后手动复制。",
       link: "分享链接",
       expires: "过期时间",
@@ -159,7 +172,7 @@
       status: "状态",
       userSearch: "搜索昵称或账户名",
       security: "安全隔离",
-      securityHint: "上传的页面在沙盒中运行，分享链接可随时撤销。",
+      securityHint: "上传的页面在沙盒中运行，分享链接可随时删除。",
       openWorkspace: "打开工作区",
       viewOnlyHint: "你拥有只读权限，无法修改文件或创建分享。",
       remove: "移除",
@@ -188,6 +201,8 @@
       copyManual: "请选择并复制下方链接。",
       notFound: "内容不存在或已被移除。",
       permissionDenied: "你没有执行此操作的权限。",
+      logoutUnconfirmed: "已返回登录页，但服务器未确认退出，原会话可能仍有效。请检查网络后重试退出。",
+      originDenied: "已拒绝来自跨站页面或不受信任预览的请求，请直接打开 babaShare 页面操作。",
       conflict: "名称或账户已存在，请使用其他值。",
       invalidInput: "提交内容不正确，请检查后重试。",
       loginFailed: "邮箱或密码不正确。",
@@ -206,6 +221,7 @@
       workspace: "Workspace",
       myShares: "My shares",
       account: "My account",
+      accountTabs: "Account sections",
       users: "User management",
       settings: "Settings",
       newWorkspace: "New workspace",
@@ -226,6 +242,13 @@
       logout: "Sign out",
       language: "Language",
       theme: "Switch theme",
+      accent: "Accent color",
+      accentBlue: "Blue",
+      accentGreen: "Green",
+      accentPurple: "Purple",
+      accentRed: "Red",
+      accentOrange: "Orange",
+      accentTeal: "Teal",
       dark: "Dark",
       light: "Light",
       search: "Search by name prefix",
@@ -248,6 +271,7 @@
       delete: "Delete",
       preview: "Preview",
       fullscreen: "Full screen",
+      fullscreenUnavailable: "Full screen is unavailable. Continue in normal preview.",
       close: "Close",
       cancel: "Cancel",
       confirm: "Confirm",
@@ -266,8 +290,8 @@
       required: "Fields marked * are required.",
       requiredError: "Please complete this field.",
       emailError: "Enter a valid email address, such as name@example.com.",
-      passwordHint: "At least 10 characters.",
-      passwordError: "Use at least 10 characters.",
+      passwordHint: "At least 6 characters.",
+      passwordError: "Use at least 6 characters.",
       nameHint: "Do not use / or \\, . or .. as a name.",
       htmlHint: "File names must end in .html or .htm.",
       content: "HTML source",
@@ -296,6 +320,7 @@
         "Bring your pages, ideas and team together. Manage HTML prototypes and share every detail securely.",
       authEyebrow: "FROM IDEA TO EXPERIENCE",
       authFooter: "Built for better collaboration.",
+      poweredBy: "Powered by babaShare",
       retry: "Try again",
       shareTitle: "Share this folder",
       shareHint: "Anyone with the link can view this folder and its contents.",
@@ -307,6 +332,9 @@
       shareCreated: "Your share link is ready",
       copyLink: "Copy link",
       copied: "Link copied",
+      copying: "Copying…",
+      copySuccess: "Copied",
+      copyRetry: "Copy failed, retry",
       copyFailed: "Copy unavailable. Select and copy the link manually.",
       link: "Share link",
       expires: "Expires",
@@ -362,7 +390,7 @@
       userSearch: "Search nickname or account",
       security: "Secure by design",
       securityHint:
-        "Uploaded pages run in a sandbox. Shared links can be revoked anytime.",
+        "Uploaded pages run in a sandbox. Shared links can be deleted anytime.",
       openWorkspace: "Open workspace",
       viewOnlyHint:
         "You have view-only access. Editing and sharing are unavailable.",
@@ -392,6 +420,8 @@
       copyManual: "Select and copy the link below.",
       notFound: "This item no longer exists.",
       permissionDenied: "You do not have permission to do this.",
+      logoutUnconfirmed: "You are back at sign-in, but the server did not confirm sign-out. The previous session may still be active. Check your network and retry signing out.",
+      originDenied: "Requests from cross-site pages or untrusted previews are blocked. Open babaShare directly to continue.",
       conflict: "This name or account already exists.",
       invalidInput: "Check your input and try again.",
       loginFailed: "Incorrect email or password.",
@@ -410,6 +440,7 @@
       workspace: "مساحة العمل",
       myShares: "مشاركاتي",
       account: "حسابي",
+      accountTabs: "أقسام الحساب",
       users: "إدارة المستخدمين",
       settings: "الإعدادات",
       newWorkspace: "مساحة عمل جديدة",
@@ -430,6 +461,13 @@
       logout: "تسجيل الخروج",
       language: "اللغة",
       theme: "تغيير المظهر",
+      accent: "لون التمييز",
+      accentBlue: "أزرق",
+      accentGreen: "أخضر",
+      accentPurple: "بنفسجي",
+      accentRed: "أحمر",
+      accentOrange: "برتقالي",
+      accentTeal: "فيروزي",
       dark: "داكن",
       light: "فاتح",
       search: "البحث ببداية اسم الملف",
@@ -452,6 +490,7 @@
       delete: "حذف",
       preview: "معاينة",
       fullscreen: "ملء الشاشة",
+      fullscreenUnavailable: "ملء الشاشة غير متاح. تابع المعاينة العادية.",
       close: "إغلاق",
       cancel: "إلغاء",
       confirm: "تأكيد",
@@ -470,8 +509,8 @@
       required: "الحقول المحددة بعلامة * مطلوبة.",
       requiredError: "يرجى ملء هذا الحقل.",
       emailError: "أدخل بريدًا إلكترونيًا صالحًا مثل name@example.com.",
-      passwordHint: "عشرة أحرف على الأقل.",
-      passwordError: "استخدم عشرة أحرف على الأقل.",
+      passwordHint: "ستة أحرف على الأقل.",
+      passwordError: "استخدم ستة أحرف على الأقل.",
       nameHint: "لا تستخدم / أو \\ أو . أو .. في الاسم.",
       htmlHint: "يجب أن ينتهي اسم الملف بـ .html أو .htm.",
       content: "شفرة HTML",
@@ -499,6 +538,7 @@
         "اجمع الصفحات والأفكار والفريق معًا. أدر نماذج HTML وشارك كل التفاصيل بأمان.",
       authEyebrow: "من الفكرة إلى التجربة",
       authFooter: "مصمم لتعاون أفضل.",
+      poweredBy: "Powered by babaShare",
       retry: "حاول مجددًا",
       shareTitle: "مشاركة هذا المجلد",
       shareHint: "يمكن لأي شخص يملك الرابط مشاهدة المجلد ومحتوياته.",
@@ -510,6 +550,9 @@
       shareCreated: "رابط المشاركة جاهز",
       copyLink: "نسخ الرابط",
       copied: "تم نسخ الرابط",
+      copying: "جارٍ النسخ…",
+      copySuccess: "تم النسخ",
+      copyRetry: "فشل النسخ، أعد المحاولة",
       copyFailed: "تعذر النسخ. حدّد الرابط وانسخه يدويًا.",
       link: "رابط المشاركة",
       expires: "انتهاء الصلاحية",
@@ -591,6 +634,8 @@
       copyManual: "حدد الرابط أدناه وانسخه.",
       notFound: "هذا العنصر غير موجود.",
       permissionDenied: "ليس لديك إذن لتنفيذ هذه العملية.",
+      logoutUnconfirmed: "عدت إلى تسجيل الدخول، لكن الخادم لم يؤكد الخروج وقد تبقى الجلسة السابقة نشطة. تحقق من الشبكة ثم أعد محاولة الخروج.",
+      originDenied: "تم حظر الطلب القادم من صفحة خارجية أو معاينة غير موثوقة. افتح صفحة babaShare مباشرة للمتابعة.",
       conflict: "الاسم أو الحساب موجود بالفعل.",
       invalidInput: "تحقق من المدخلات وحاول مجددًا.",
       loginFailed: "البريد أو كلمة المرور غير صحيحة.",
@@ -661,7 +706,7 @@
       mcpKeys: "MCP Key",
       mcpKeysHint: "使用个人密钥连接 AI 客户端，仅调用你已有权限内的工作区、文件与分享；不能管理密钥、账户或安全设置。",
       mcpCreate: "创建 MCP Key",
-      mcpLimit: "有效密钥 {count} / 10。达到上限后请先撤销不再使用的密钥。",
+      mcpLimit: "有效密钥 {count} / 10。达到上限后请先删除不再使用的密钥。",
       mcpFilter: "密钥状态",
       mcpAll: "全部密钥",
       mcpName: "密钥名称",
@@ -688,7 +733,7 @@
       mcpUseCodexCli: "Codex CLI 官方帮助显示 --bearer-token-env-var 仅适用于 Streamable HTTP；配置后从已设置变量的同一用户环境启动或重启 Codex。",
       mcpUseOpenCode: "OpenCode：官方默认用户配置为 ~/.config/opencode/opencode.json，亦支持 JSONC；先核对本机版本、已有文件及 OPENCODE_CONFIG 覆盖，再合并 mcp.baba-share，保留其他 server，不新建项目配置。{env:BABA_SHARE_MCP_KEY} 表示由客户端读取环境变量，oauth=false 禁用 OAuth 自动流程。",
       mcpUseOther: "Claude Desktop、Cline 等其他客户端必须先核对本机版本是否支持远程 Streamable HTTP 与安全 Bearer 凭据，不能照搬通用 JSON；不支持时先说明限制，勿擅自安装桥接器。使用 Authorization: Bearer 加环境变量实际值鉴权（变量插值语法因客户端而异），不使用网页登录 Cookie 或 OAuth，不把密钥放入 URL。远程访问用可信且可达的 HTTPS；localhost、127.0.0.1、::1 只指客户端本机。",
-      mcpUseVerify: "只读验证：客户端执行 initialize → notifications/initialized → tools/list，确认 19 个工具，再调用 workspace_list {}；空 items 也是成功，不创建工作区做测试。仅汇报配置路径、服务地址、变量是否存在及连接结果，不回显密钥。完成后清理剪贴板；泄露请立即撤销密钥。",
+      mcpUseVerify: "只读验证：客户端执行 initialize → notifications/initialized → tools/list，确认 19 个工具，再调用 workspace_list {}；空 items 也是成功，不创建工作区做测试。仅汇报配置路径、服务地址、变量是否存在及连接结果，不回显密钥。完成后清理剪贴板；泄露请立即删除密钥。",
       mcpUseDiagnose: "排查：HTTP 401 / AUTH_REQUIRED 检查客户端变量是否存在、有效期、撤销和账户禁用状态；HTTP 403 / ORIGIN_DENIED 检查来源/反代，不绕过防护。HTTP 200 的 result.isError=true 是工具业务错误，PERMISSION_DENIED、READ_ONLY、FOREIGN_CONTENT 应检查实际权限；MCP_THROTTLED 等待限流窗口。JSON-RPC error 检查协议/参数；连接失败检查可达地址、端口和可信证书。不要输出环境变量全集、Authorization、密钥或完整配置，不使用会泄露凭据的诊断命令。",
       MCP_KEY_NOT_RECOVERABLE: "旧密钥仅保存摘要，无法恢复原文；请重新创建新密钥。旧密钥不会自动撤销。",
       MCP_KEY_INACTIVE: "已撤销或过期的密钥不能复制使用。",
@@ -699,7 +744,7 @@
       mcpInstructions: "可复制安装说明",
       mcpReadmeIntro: "将以下说明交给 Codex 自动配置 babaShare MCP。仅合并必要的 MCP 配置，不覆盖其他 server，不自动创建密钥或修改账户、安全设置。",
       mcpReadmeSecurity: "安全：普通说明不含真实密钥。请在可信终端自行设置 BABA_SHARE_MCP_KEY，切勿把密钥写入配置文件、URL、日志、源码、提交或公开聊天。设置环境变量后，从该环境重新启动 Codex 或其他客户端。示例变量仅作用于当前会话；不要把真实密钥命令写入 shell 历史，优先使用下方隐藏输入。",
-      mcpReadmePrivate: "私密说明：下方包含一次性完整密钥，只可交给你信任的客户端。密钥可能进入 AI 服务商或聊天记录；不要记录、公开或提交。完成后清理剪贴板，泄露后立即撤销密钥。",
+      mcpReadmePrivate: "私密说明：下方包含一次性完整密钥，只可交给你信任的客户端。密钥可能进入 AI 服务商或聊天记录；不要记录、公开或提交。完成后清理剪贴板，泄露后立即删除密钥。",
       mcpReadmeNetwork: "网络：服务端点由当前服务 origin 动态生成，保留实际端口。跨设备或远程部署必须使用可信 HTTPS；localhost、127.0.0.1 和 ::1 仅指客户端所在本机，不能供另一台设备连接。",
       mcpReadmeEnvironment: "1. 在即将启动客户端的终端安全设置环境变量（替换占位符，或使用隐藏输入；不要将真实值保存到命令历史）：",
       mcpReadmeCodex: "2. 在同一终端执行 Codex CLI 命令：",
@@ -709,14 +754,14 @@
       mcpReadmeApi: "密钥管理 API（仅网页登录 Cookie 会话，不能使用 MCP Bearer 密钥调用）：",
       mcpReadmeTools: "可用工具与参数（实际权限仍由服务端校验）：",
       mcpUnavailable: "请通过 HTTP(S) 服务打开此页面，再生成当前服务的安装说明。",
-      MCP_KEY_LIMIT: "最多只能有 10 个有效密钥，请先撤销不再使用的密钥。",
+      MCP_KEY_LIMIT: "最多只能有 10 个有效密钥，请先删除不再使用的密钥。",
       MCP_KEY_NOT_EXIST: "密钥不存在，或不属于当前账户。"    },
     "en-US": {
       brand: "babaShare",
       mcpKeys: "MCP keys",
       mcpKeysHint: "Connect AI clients with personal keys. They can only access your permitted workspaces, files and shares, not keys, accounts or security settings.",
       mcpCreate: "Create MCP key",
-      mcpLimit: "Active keys: {count} / 10. Revoke an unused key before creating another at the limit.",
+      mcpLimit: "Active keys: {count} / 10. Delete an unused key before creating another at the limit.",
       mcpFilter: "Key status",
       mcpAll: "All keys",
       mcpName: "Key name",
@@ -743,7 +788,7 @@
       mcpUseCodexCli: "The official Codex CLI help confirms --bearer-token-env-var is for Streamable HTTP servers only. Launch or restart Codex from the same user environment after setting the variable.",
       mcpUseOpenCode: "OpenCode: the documented default user config is ~/.config/opencode/opencode.json; JSONC is also supported. Check the installed version, existing files and OPENCODE_CONFIG override first, then merge mcp.baba-share while preserving other servers, without creating project configuration. {env:BABA_SHARE_MCP_KEY} makes the client read the environment variable, and oauth=false disables automatic OAuth.",
       mcpUseOther: "Claude Desktop, Cline and other clients: first check whether the installed version supports remote Streamable HTTP and secure Bearer credentials; generic JSON is not portable. If unsupported, explain the limitation without installing a bridge automatically. Use Authorization: Bearer with the actual environment value (interpolation varies by client), not browser Cookies or OAuth, and never a key in the URL. Use trusted reachable HTTPS remotely; localhost, 127.0.0.1 and ::1 refer only to the client machine.",
-      mcpUseVerify: "Read-only verification: initialize → notifications/initialized → tools/list, confirm 19 tools, then workspace_list {}. Empty items is success too; do not create a workspace to test. Report only configuration paths, endpoint, whether the variable exists, and connection results; never echo the key. Clear the clipboard afterwards and revoke exposed keys immediately.",
+      mcpUseVerify: "Read-only verification: initialize → notifications/initialized → tools/list, confirm 19 tools, then workspace_list {}. Empty items is success too; do not create a workspace to test. Report only configuration paths, endpoint, whether the variable exists, and connection results; never echo the key. Clear the clipboard afterwards and delete exposed keys immediately.",
       mcpUseDiagnose: "Diagnostics: HTTP 401 / AUTH_REQUIRED: check variable existence, expiry, revocation and disabled accounts. HTTP 403 / ORIGIN_DENIED: check origin/proxy settings without bypassing safeguards. HTTP 200 with result.isError=true is a tool business error: check permissions for PERMISSION_DENIED, READ_ONLY and FOREIGN_CONTENT; wait out MCP_THROTTLED. JSON-RPC error indicates protocol/parameter issues. For connection failures check reachable host, port and trusted certificates. Never dump all environment variables, Authorization, keys or full configuration, or use credential-revealing diagnostic commands.",
       MCP_KEY_NOT_RECOVERABLE: "This legacy key has only a hash and cannot be recovered. Create a new key; the old one is not automatically revoked.",
       MCP_KEY_INACTIVE: "Revoked or expired keys cannot be copied for use.",
@@ -754,7 +799,7 @@
       mcpInstructions: "Copyable installation instructions",
       mcpReadmeIntro: "Give these instructions to Codex to configure babaShare MCP. Merge only the necessary MCP configuration, preserve other servers, and do not create keys or change accounts or security settings automatically.",
       mcpReadmeSecurity: "Security: normal instructions contain no real key. Set BABA_SHARE_MCP_KEY yourself in a trusted terminal. Never put keys in config files, URLs, logs, source, commits or public chats. Restart Codex or another client from the environment after setting the variable. Examples are session-only; avoid saving real keys in shell history and prefer hidden input below.",
-      mcpReadmePrivate: "PRIVATE: this text contains the full one-time key. Share only with a trusted client. It may reach an AI provider or chat history; never log, publish or commit it. Clear your clipboard afterwards and revoke the key immediately if exposed.",
+      mcpReadmePrivate: "PRIVATE: this text contains the full one-time key. Share only with a trusted client. It may reach an AI provider or chat history; never log, publish or commit it. Clear your clipboard afterwards and delete the key immediately if exposed.",
       mcpReadmeNetwork: "Network: the endpoint uses this service’s current origin and actual port. Remote or cross-device deployment requires trusted HTTPS. localhost, 127.0.0.1 and ::1 refer only to the client’s own machine and cannot connect another device.",
       mcpReadmeEnvironment: "1. Securely set the variable in the terminal that will launch the client (replace the placeholder, or use hidden input; never save a real key in shell history):",
       mcpReadmeCodex: "2. In the same terminal run the Codex CLI command:",
@@ -764,14 +809,14 @@
       mcpReadmeApi: "Key management API (web Cookie sessions only; MCP Bearer keys cannot use these endpoints):",
       mcpReadmeTools: "Available tools and arguments (permissions are enforced by the server):",
       mcpUnavailable: "Open this page through the HTTP(S) service before generating installation instructions.",
-      MCP_KEY_LIMIT: "You can have at most 10 active keys. Revoke an unused key first.",
+      MCP_KEY_LIMIT: "You can have at most 10 active keys. Delete an unused key first.",
       MCP_KEY_NOT_EXIST: "The key does not exist or belongs to another account."    },
     "ar-SA": {
       brand: "babaShare",
       mcpKeys: "مفاتيح MCP",
       mcpKeysHint: "اربط عملاء الذكاء الاصطناعي بمفاتيح شخصية للوصول ضمن صلاحياتك إلى المساحات والملفات والمشاركات فقط، دون إدارة المفاتيح أو الحسابات أو الأمان.",
       mcpCreate: "إنشاء مفتاح MCP",
-      mcpLimit: "المفاتيح النشطة: {count} / 10. ألغ مفتاحًا غير مستخدم عند بلوغ الحد.",
+      mcpLimit: "المفاتيح النشطة: {count} / 10. احذف مفتاحًا غير مستخدم عند بلوغ الحد.",
       mcpFilter: "حالة المفتاح",
       mcpAll: "كل المفاتيح",
       mcpName: "اسم المفتاح",
@@ -819,7 +864,7 @@
       mcpReadmeApi: "واجهة إدارة المفاتيح (جلسة Cookie في الويب فقط؛ لا تعمل مفاتيح MCP Bearer هنا):",
       mcpReadmeTools: "الأدوات والمعاملات المتاحة (يتحقق الخادم من الصلاحيات):",
       mcpUnavailable: "افتح الصفحة عبر خدمة HTTP(S) قبل إنشاء تعليمات التثبيت.",
-      MCP_KEY_LIMIT: "الحد الأقصى 10 مفاتيح نشطة. ألغ مفتاحًا غير مستخدم أولًا.",
+      MCP_KEY_LIMIT: "الحد الأقصى 10 مفاتيح نشطة. احذف مفتاحًا غير مستخدم أولًا.",
       MCP_KEY_NOT_EXIST: "المفتاح غير موجود أو يتبع حسابًا آخر."    }
   };
   Object.assign(mcpMessages["zh-CN"], {
@@ -827,7 +872,7 @@
     mcpNameError: "请输入 1–100 个字符的名称。",
     mcpCustom: "自定义时长",
     mcpCustomHours: "有效时长（小时）",
-    mcpCustomHint: "输入 1–87600 的整数小时（最长约 10 年）。永久密钥也应定期检查并主动撤销。",
+    mcpCustomHint: "输入 1–87600 的整数小时（最长约 10 年）。永久密钥也应定期检查并主动删除。",
     mcpDateError: "请输入 1–87600 的整数小时，或选择永久有效。",
     mcpReadmeApiFields: "expireHours 为 null 表示永久，否则为 1–87600 的整数小时。requestId 为 16–100 位随机字母、数字、_ 或 -；同参数重试复用它。最多 10 个有效密钥。创建返回元数据和 key；重复请求返回 KEY_ALREADY_CREATED。本人有效 Cookie+Origin 可 POST /mcp-key/content，body 为 {id}，恢复新密钥；旧密钥返回 MCP_KEY_NOT_RECOVERABLE，不自动撤销。列表只返回元数据，绝不返回 key 或哈希。时间为 UTC 毫秒；expireTime/revokedTime 可为 null。撤销返回 {}。",
     mcpReadmeToolHints: "路径相对工作区，空路径表示根目录。file_upload 接受 1–500 个文件、标准 Base64，并保留相对路径。share_create 的 expireHours 默认 0 表示永久。member_change 必须提供 userId 或 userName。执行 workspace_delete、文件/文件夹移动或删除、share_revoke、member_delete 前须确认。",
@@ -840,7 +885,7 @@
     mcpNameError: "Enter a name with 1–100 characters.",
     mcpCustom: "Custom duration",
     mcpCustomHours: "Lifetime (hours)",
-    mcpCustomHint: "Enter 1–87600 whole hours (up to about 10 years). Review and revoke permanent keys regularly.",
+    mcpCustomHint: "Enter 1–87600 whole hours (up to about 10 years). Review and delete unused permanent keys regularly.",
     mcpDateError: "Enter 1–87600 whole hours or choose no expiry.",
     mcpReadmeApiFields: "expireHours: null = permanent; otherwise integer 1–87600. requestId: random letters, digits, _ or -, 16–100 characters; reuse for unchanged retries. Maximum 10 active keys. Creation returns metadata + key; repeated requests return KEY_ALREADY_CREATED. The owner's active Cookie + Origin can POST /mcp-key/content with {id} to recover a new key; legacy keys return MCP_KEY_NOT_RECOVERABLE without automatic revocation. Lists contain metadata only, never keys or hashes. Times are UTC milliseconds; expireTime/revokedTime can be null. DELETE returns {}.",
     mcpReadmeToolHints: "Paths are relative to a workspace; empty path means root. file_upload accepts 1–500 files using standard Base64 and preserves relative paths. share_create expireHours defaults to 0 (permanent). member_change requires userId or userName. Confirm workspace_delete, file/folder move/delete, share_revoke and member_delete before executing.",
@@ -853,7 +898,7 @@
     mcpNameError: "أدخل اسمًا من حرف واحد إلى 100 حرف.",
     mcpCustom: "مدة مخصصة",
     mcpCustomHours: "مدة الصلاحية بالساعات",
-    mcpCustomHint: "أدخل عددًا صحيحًا من 1 إلى 87600 ساعة (نحو 10 سنوات). راجع المفاتيح الدائمة وألغها دوريًا.",
+    mcpCustomHint: "أدخل عددًا صحيحًا من 1 إلى 87600 ساعة (نحو 10 سنوات). راجع المفاتيح الدائمة واحذف غير المستخدم منها دوريًا.",
     mcpDateError: "أدخل عددًا صحيحًا من 1 إلى 87600 ساعة أو اختر صلاحية دائمة.",
     mcpReadmeApiFields: "expireHours بقيمة null تعني صلاحية دائمة، وإلا عدد صحيح 1–87600. requestId عشوائي من 16–100 حرف أو رقم أو _ أو -؛ أعد استخدامه لنفس الطلب. الحد 10 مفاتيح نشطة. يعيد الإنشاء البيانات الوصفية وkey؛ يعيد التكرار KEY_ALREADY_CREATED. يستطيع المالك بجلسة Cookie وOrigin صالحين إرسال POST /mcp-key/content مع {id} لاستعادة مفتاح جديد؛ تعيد المفاتيح القديمة MCP_KEY_NOT_RECOVERABLE دون إلغاء تلقائي. القائمة بيانات وصفية فقط دون مفاتيح أو بصمات. الوقت بالمللي ثانية UTC، وقد تكون expireTime وrevokedTime بقيمة null. يعيد الإلغاء {}.",
     mcpReadmeToolHints: "المسارات نسبية لمساحة العمل، والفارغ يعني الجذر. يقبل file_upload من 1 إلى 500 ملف بصيغة Base64 القياسية ويحفظ المسارات النسبية. القيمة الافتراضية expireHours في share_create هي 0 أي دائم. يتطلب member_change تقديم userId أو userName. اطلب التأكيد قبل حذف مساحة أو نقل أو حذف ملف أو مجلد أو إلغاء مشاركة أو حذف عضو.",
@@ -862,17 +907,42 @@
     REQUEST_CONFLICT: "استُخدم معرّف الطلب لمعاملات أخرى. أغلق الحوار ثم أعد الإنشاء."
   });
   Object.assign(mcpMessages["zh-CN"], {
-    mcpReadmeDeployment: "远程部署：将 BABA_SHARE_PUBLIC_ORIGIN 设为实际主站HTTPS origin，BABA_SHARE_PREVIEW_ORIGIN 设为不同的预览HTTPS origin，并启用 BABA_SHARE_SECURE_COOKIE=1。反向代理保留 /baba-share/ 与 /api/baba-share/core/v1/ 路径并转发 Authorization，不记录该头。",
+    mcpReadmeDeployment: "远程部署：仅一个HTTP服务和监听端口，将 BABA_SHARE_PUBLIC_ORIGIN 设为实际HTTPS origin，并启用 BABA_SHARE_SECURE_COOKIE=1。原始预览与主站同端口，以响应级CSP sandbox和iframe沙箱隔离，不允许allow-same-origin。反向代理保留 /baba-share/（含preview）与 /api/baba-share/core/v1/ 路径及预览安全头，转发 Authorization但不记录该头或完整票据路径。",
     mcpReadmeUpload: "相对资源上传示例：将 prototype/index.html、css/site.css、js/app.js、images/logo.png 一起上传，保持HTML中的相对引用。将每个文件原始字节转为标准Base64，file_upload 的 path 是目标目录，files[].path 是文件相对路径。下面编码占位符不能照字面发送。上传前确认覆盖范围，不上传.env或密钥；上传后用node_list和页面预览核查。"
   });
   Object.assign(mcpMessages["en-US"], {
-    mcpReadmeDeployment: "Remote deployment: set BABA_SHARE_PUBLIC_ORIGIN to the real HTTPS application origin, BABA_SHARE_PREVIEW_ORIGIN to a separate HTTPS preview origin, and BABA_SHARE_SECURE_COOKIE=1. Preserve /baba-share/ and /api/baba-share/core/v1/ in the reverse proxy; forward Authorization without logging it.",
+    mcpReadmeDeployment: "Remote deployment: run one HTTP service on one port, set BABA_SHARE_PUBLIC_ORIGIN to the real HTTPS origin and BABA_SHARE_SECURE_COOKIE=1. Raw previews share the application port but use response-level CSP sandbox and iframe isolation without allow-same-origin. Preserve /baba-share/ (including preview), /api/baba-share/core/v1/ and preview security headers in the reverse proxy; forward Authorization without logging it or complete ticket paths.",
     mcpReadmeUpload: "Relative asset upload example: upload prototype/index.html together with css/site.css, js/app.js and images/logo.png, preserving relative HTML references. Encode each file’s original bytes as standard Base64. file_upload path is the destination directory and files[].path is the relative file path. Replace the encoding placeholders below before sending. Confirm overwrite scope first, exclude .env and keys, then verify using node_list and browser preview."
   });
   Object.assign(mcpMessages["ar-SA"], {
-    mcpReadmeDeployment: "للنشر البعيد اضبط BABA_SHARE_PUBLIC_ORIGIN على أصل التطبيق الفعلي عبر HTTPS وBABA_SHARE_PREVIEW_ORIGIN على أصل معاينة HTTPS مختلف، وفعل BABA_SHARE_SECURE_COOKIE=1. احتفظ بمساري /baba-share/ و/api/baba-share/core/v1/ في الوكيل العكسي ومرر Authorization دون تسجيله.",
+    mcpReadmeDeployment: "للنشر البعيد شغّل خدمة HTTP واحدة ومنفذًا واحدًا، واضبط BABA_SHARE_PUBLIC_ORIGIN على الأصل الفعلي عبر HTTPS وBABA_SHARE_SECURE_COOKIE=1. تستخدم المعاينة المنفذ نفسه مع عزل CSP sandbox في الاستجابة وiframe دون allow-same-origin. احتفظ بمساري /baba-share/ بما فيه preview و/api/baba-share/core/v1/ ورؤوس أمان المعاينة في الوكيل العكسي؛ مرر Authorization دون تسجيله أو تسجيل مسارات التذاكر الكاملة.",
     mcpReadmeUpload: "مثال رفع الموارد النسبية: ارفع prototype/index.html مع css/site.css وjs/app.js وimages/logo.png مع إبقاء مراجع HTML النسبية. حوّل بايتات كل ملف إلى Base64 قياسي. path في file_upload هو مجلد الوجهة وfiles[].path مسار الملف النسبي. استبدل العناصر النائبة للترميز قبل الإرسال. أكد نطاق الاستبدال أولًا واستبعد .env والمفاتيح، ثم تحقق باستخدام node_list ومعاينة الصفحة."
   });
+  const workspaceMessages = {
+    "zh-CN": {
+      editWorkspace: "编辑工作区", deleteWorkspace: "删除工作区", workspaceDescription: "工作区描述",
+      deleteWorkspaceConfirm: "确定删除工作区“{name}”及全部文件、成员和分享链接？此操作不可撤销。",
+      existingShares: "此文件夹已有有效分享", existingSharesHint: "可使用已有链接，也可创建独立的新分享链接。",
+      existingShareChoice: "选择已有分享", useExistingShare: "使用已有分享", newShare: "新建分享",
+      existingShareLink: "已有分享链接", shareOption: "分享 {number} · 创建：{created} · 到期：{expires}",
+    },
+    "en-US": {
+      editWorkspace: "Edit workspace", deleteWorkspace: "Delete workspace", workspaceDescription: "Workspace description",
+      deleteWorkspaceConfirm: "Delete workspace “{name}” with all files, members and share links? This cannot be undone.",
+      existingShares: "This folder already has active shares", existingSharesHint: "Use an existing link or create a separate new share link.",
+      existingShareChoice: "Choose an existing share", useExistingShare: "Use existing share", newShare: "New share",
+      existingShareLink: "Existing share link", shareOption: "Share {number} · Created: {created} · Expires: {expires}",
+    },
+    "ar-SA": {
+      editWorkspace: "تعديل مساحة العمل", deleteWorkspace: "حذف مساحة العمل", workspaceDescription: "وصف مساحة العمل",
+      deleteWorkspaceConfirm: "هل تريد حذف مساحة العمل «{name}» وجميع الملفات والأعضاء وروابط المشاركة؟ لا يمكن التراجع.",
+      existingShares: "توجد مشاركات سارية لهذا المجلد", existingSharesHint: "استخدم رابطًا موجودًا أو أنشئ رابط مشاركة جديدًا مستقلًا.",
+      existingShareChoice: "اختر مشاركة موجودة", useExistingShare: "استخدام المشاركة الموجودة", newShare: "مشاركة جديدة",
+      existingShareLink: "رابط المشاركة الموجود", shareOption: "مشاركة {number} · الإنشاء: {created} · الانتهاء: {expires}",
+    },
+  };
+  for (const [locale, messages] of Object.entries(workspaceMessages))
+    Object.assign(dictionaries[locale], messages);
   const uploadMessages = {
     "zh-CN": {
       UPLOAD_RECOVERY_REQUIRED: "上传恢复未完成，已保留恢复备份。请联系管理员检查，暂勿重复上传。",
@@ -912,11 +982,65 @@
     Object.assign(dictionaries[locale], messages);
   for (const [locale, messages] of Object.entries(mcpMessages))
     Object.assign(dictionaries[locale], messages);
-  let ctx = {
-    locale: document.documentElement.lang || "zh-CN",
-    theme: document.documentElement.dataset.mode || "dark",
-    dir: document.documentElement.dir || "ltr",
+  const invitationMessages = {
+    "zh-CN": {
+      breadcrumbs: "面包屑", inviteGenerate: "生成邀请链接", inviteManage: "我的邀请", inviteLink: "邀请链接",
+      inviteCreated: "邀请链接已生成", inviteEmpty: "暂无邀请链接。",
+      inviteHint: "生成可多人使用的邀请链接，默认 7 天有效。已有账号登录后自动加入；默认非协作，查看者始终只读。",
+      inviteOnce: "链接仅生成时展示一次，请妥善复制。列表只保留邀请信息；删除后立即失效，已加入成员不受影响。",
+      inviteDeleteConfirm: "确定删除此邀请？链接将立即失效，已加入成员不会被移除。",
+      inviteLoginHint: "请使用已有账户登录，登录后将自动加入工作区。此链接不会自动注册账户。",
+      inviteJoining: "正在通过邀请加入工作区…", inviteJoined: "已加入工作区，正在打开…",
+      INVITATION_INVALID: "邀请无效、已过期或创建者已无管理权限，请联系工作区管理员。",
+      INVITATION_ALREADY_CREATED: "此邀请已生成且不会重复创建。链接仅首次展示；如未保存，请关闭后重新生成。",
+      shareDeleteConfirm: "确定删除此分享？原链接将立即失效，记录将移除，此操作无法撤销。",
+      mcpDeleteConfirm: "确定删除密钥“{name}”？记录与恢复信息将永久移除，客户端立即失去访问权限，无法恢复。",
+    },
+    "en-US": {
+      breadcrumbs: "Breadcrumbs", inviteGenerate: "Generate invite link", inviteManage: "My invitations", inviteLink: "Invitation link",
+      inviteCreated: "Invitation link generated", inviteEmpty: "No invitation links yet.",
+      inviteHint: "Generate a reusable invitation link, valid for 7 days by default. Existing accounts join after login. Collaboration is off by default; viewers remain read-only.",
+      inviteOnce: "The link is shown only once. Copy it securely. Lists store metadata only; deleting it immediately prevents new joins without removing existing members.",
+      inviteDeleteConfirm: "Delete this invitation? The link stops working immediately. Existing members will not be removed.",
+      inviteLoginHint: "Log in with an existing account to join the workspace automatically. This link does not register accounts.",
+      inviteJoining: "Joining the workspace…", inviteJoined: "Workspace joined. Opening…",
+      INVITATION_INVALID: "The invitation is invalid, expired, or its creator no longer has management permission. Contact the workspace administrator.",
+      INVITATION_ALREADY_CREATED: "This invitation was already generated; no duplicate was created. Links are shown only once. Close and generate another if needed.",
+      shareDeleteConfirm: "Delete this share? Its link stops working immediately and the record is removed. This cannot be undone.",
+      mcpDeleteConfirm: "Delete key “{name}”? Its record and recovery information are permanently removed. Clients immediately lose access. This cannot be undone.",
+    },
+    "ar-SA": {
+      breadcrumbs: "مسار التنقل", inviteGenerate: "إنشاء رابط دعوة", inviteManage: "دعواتي", inviteLink: "رابط الدعوة",
+      inviteCreated: "تم إنشاء رابط الدعوة", inviteEmpty: "لا توجد روابط دعوة.",
+      inviteHint: "أنشئ رابط دعوة لعدة أشخاص بصلاحية افتراضية 7 أيام. تنضم الحسابات الموجودة بعد تسجيل الدخول. التعاون معطل افتراضيًا ويبقى المشاهد للقراءة فقط.",
+      inviteOnce: "يظهر الرابط مرة واحدة فقط. انسخه بأمان. تحتفظ القائمة بالبيانات الوصفية فقط؛ يمنع الحذف الانضمام الجديد فورًا دون إزالة الأعضاء الحاليين.",
+      inviteDeleteConfirm: "هل تريد حذف الدعوة؟ سيتوقف الرابط فورًا ولن يُزال الأعضاء الحاليون.",
+      inviteLoginHint: "سجّل الدخول بحساب موجود للانضمام تلقائيًا. لا ينشئ هذا الرابط حسابًا جديدًا.",
+      inviteJoining: "جارٍ الانضمام إلى مساحة العمل…", inviteJoined: "تم الانضمام، جارٍ الفتح…",
+      INVITATION_INVALID: "الدعوة غير صالحة أو منتهية أو لم يعد منشئها يملك صلاحية الإدارة. اتصل بالمسؤول.",
+      INVITATION_ALREADY_CREATED: "أُنشئت هذه الدعوة سابقًا ولن تتكرر. يظهر الرابط مرة واحدة؛ أغلق النافذة وأنشئ دعوة أخرى عند الحاجة.",
+      shareDeleteConfirm: "هل تريد حذف المشاركة؟ سيتوقف الرابط فورًا وسيُحذف السجل. لا يمكن التراجع.",
+      mcpDeleteConfirm: "هل تريد حذف المفتاح «{name}»؟ سيُحذف السجل ومعلومات الاستعادة نهائيًا وسيفقد العملاء الوصول فورًا. لا يمكن التراجع.",
+    },
   };
+  for (const [locale, messages] of Object.entries(invitationMessages))
+    Object.assign(dictionaries[locale], messages);
+  const accents = Object.freeze(["blue", "green", "purple", "red", "orange", "teal"]);
+  function normalizeContext(value) {
+    const next = value && typeof value === "object" ? value : {};
+    const locale = Object.hasOwn(dictionaries, next.locale) ? next.locale : "zh-CN";
+    return {
+      locale,
+      theme: ["light", "dark"].includes(next.theme) ? next.theme : "dark",
+      accent: accents.includes(next.accent) ? next.accent : "blue",
+      dir: locale.split("-")[0] === "ar" ? "rtl" : "ltr",
+    };
+  }
+  let ctx = normalizeContext({
+    locale: document.documentElement.lang,
+    theme: document.documentElement.dataset.mode,
+    accent: document.documentElement.dataset.accent,
+  });
   const listeners = new Set();
   function t(key, params = {}) {
     let value = dictionaries[ctx.locale]?.[key];
@@ -932,15 +1056,12 @@
     return value.replace(/\{(\w+)\}/g, (_, k) => String(params[k] ?? ""));
   }
   function apply(next) {
-    ctx = {
-      theme: ["light", "dark"].includes(next.theme) ? next.theme : "dark",
-      locale: Object.hasOwn(dictionaries, next.locale) ? next.locale : "zh-CN",
-    };
-    ctx.dir = ctx.locale.split("-")[0] === "ar" ? "rtl" : "ltr";
+    ctx = normalizeContext({ ...ctx, ...next });
     const root = document.documentElement;
     root.lang = ctx.locale;
     root.dir = ctx.dir;
     root.dataset.mode = ctx.theme;
+    root.dataset.accent = ctx.accent;
     document
       .querySelectorAll("[data-i18n]")
       .forEach((el) => (el.textContent = t(el.dataset.i18n)));
@@ -963,6 +1084,8 @@
     }
   }
   window.I18n = {
+    accents,
+    normalizeContext,
     t,
     apply,
     get ctx() {

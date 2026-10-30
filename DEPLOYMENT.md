@@ -6,7 +6,7 @@
 
 先确定唯一数据根目录 `DATA_DIR`、正在运行的实例和服务账号；停止对应写入实例后，成套备份整个目录。必须同时保留：
 
-- `data/baba-share.sqlite3`，或已有旧库 `data/product-share.sqlite3`。两者同时存在时拒绝启动，不会自动合并、移动或删除。
+- 唯一运行数据库 `data/baba-share.sqlite3`。若发现历史 `data/product-share.sqlite3`，启动安全阻断，不读取旧库、不静默另建空库、不自动搬迁或删除原文件；先保留并完整备份历史数据库及配套filedb/master，由管理员明确迁移方案。即使已有新库，也不能忽略旁边的历史库。
 - 整个 `filedb/`（包含业务所属空目录）。
 - `data/mcp-key-master`（若存在），必须和对应数据库一起保护、备份、恢复。
 - SQLite 可能存在的 `-wal`、`-shm` 文件；运行中不要只复制单个数据库文件。优先停服务备份，或使用经过验证的一致性快照方案。
@@ -20,22 +20,26 @@
 
 ## 2. 配置规则与单端口隔离
 
-应用只从**项目根目录**读取 `.env`，不从当前工作目录、数据目录或任意其他路径搜索。同名进程环境变量优先；`BABA_SHARE_*` 优先于迁移别名 `PRODUCT_SHARE_*`。`.env` 是简单 `KEY=value` 文件，不是 shell 脚本，不展开 `$VAR`、`%VAR%` 或命令。不要把含密钥的 `.env` 提交或复制进镜像。
+应用只从**项目根目录**读取 `.env`，不从当前工作目录、数据目录或任意其他路径搜索。同名进程环境变量优先；只读取 `BABA_SHARE_*` 应用配置，不再兼容旧变量别名。`.env` 是简单 `KEY=value` 文件，不是 shell 脚本，不展开 `$VAR`、`%VAR%` 或命令。不要把含密钥的 `.env` 提交或复制进镜像。
 
 | 变量 | 原生默认值 | 说明 |
 | --- | --- | --- |
 | `BABA_SHARE_DATA_DIR` | 项目根目录 | SQLite、`filedb`、master 的唯一共同根；相对路径始终相对项目根 |
-| `BABA_SHARE_HOST` | `127.0.0.1` | 默认本机；容器内 `0.0.0.0` |
+| `BABA_SHARE_HOST` | `0.0.0.0` | 默认所有 IPv4 网卡；可显式设 `127.0.0.1` 仅供本机访问 |
 | `BABA_SHARE_PORT` | `8080` | 唯一 HTTP 监听端口 |
-| `BABA_SHARE_PUBLIC_ORIGIN` | 按监听地址构造 | 浏览器实际使用的 HTTP(S) 协议、域名/IPv4 和端口，不含路径 |
+| `BABA_SHARE_PUBLIC_ORIGIN` | 通配监听时为 `http://127.0.0.1:8080` | 其他监听按地址和端口构造；外部访问须填真实 IP/域名，不使用 `0.0.0.0`；仅构造外部分享/预览 URL，不含路径，不是 Host/Origin 准入白名单 |
 | `BABA_SHARE_SECURE_COOKIE` | `0` | 公开来源使用 HTTPS 时必须设 `1` |
 | `BABA_SHARE_SESSION_HOURS` | `24` | 整数，1..87600 |
 | `BABA_SHARE_TICKET_SECONDS` | `900` | 整数，1..86400 |
 | `BABA_SHARE_MAX_BODY_BYTES` | `67108864` | 整数，1024..1073741824 |
 
+默认原生服务、Windows 服务及 Compose 宿主端口均监听 `0.0.0.0`，即所有 IPv4 网卡。监听地址不是浏览器访问地址或外部链接地址：本机访问 `127.0.0.1`，其他设备使用服务器真实 IP 或域名。未指定公开来源时，通配监听只回退到本机 `http://127.0.0.1:端口`，不会生成 `http://0.0.0.0`；局域网/公网分享应显式配置真实公开来源。程序和安装脚本不会自动放行防火墙；管理员须按预定访问范围配置防火墙与网络入口。需要仅本机访问时，可显式设置 `BABA_SHARE_HOST=127.0.0.1`，Compose 则设置 `BABA_SHARE_PUBLISH_IP=127.0.0.1`。
+
 不存在第二预览端口或预览 Origin 配置；升级时移除旧 `.env`、服务环境及代理中的相关配置。原始预览位于 `/baba-share/preview/{s|p}/token/...`（`s`/`p` 表示不同票据类型，`token` 为实际票据）。URL 与主站同端口，但响应 CSP `sandbox` **不允许 `allow-same-origin`**，浏览器按不透明来源（opaque origin）隔离上传的 HTML/JS；iframe 也保留对应沙箱限制。不能只因 URL 同源就移除这些响应头或沙箱。预览脚本访问主站 DOM、Cookie、存储和接口受到浏览器及服务端来源校验限制；依赖同源存储或接口的原型可能无法直接运行，这是隔离边界而非应绕过的错误。
 
-`Host` 必须匹配实际公开来源。Origin 只支持 HTTP(S)、IPv4/域名和可选端口，不含凭据、路径、query、片段；当前不支持 IPv6 监听。远程部署不能只改监听地址，还要设置正确公开来源、TLS、Secure Cookie 和访问控制。端口预检只能检查当时占用，绑定仍可能竞态失败；应查明占用原因，不得随意终止陌生进程。
+`BABA_SHARE_PUBLIC_ORIGIN` 只支持 HTTP(S)、IPv4/域名和可选端口，不含凭据、路径、query、片段；当前不支持 IPv6 监听。它仅构造外部分享/预览 URL，不与请求 `Host` 或浏览器 `Origin` 强绑定；配错可能生成不可访问的链接，但不会因此使正常代理登录/退出返回 403。域名准入、TLS 和入口限流由网关负责；应用保留身份认证、实时角色/工作区权限、未登录 401 及前端登录导航、预览沙箱，以及对 `Origin: null` 和明确跨站浏览器请求的阻断，不以放宽这些边界适配代理。具体来源防护拒绝 `Origin: null` 或空串；`Sec-Fetch-Site` 只允许缺失、`same-origin` 或 `none`，`same-site` 也会拒绝，以阻断不可信兄弟子域。无 Fetch Metadata 的客户端由网关控制准入。应用不盲目信任 `X-Forwarded-*` 作为准入依据。
+
+生产可由 Nginx 终止 HTTPS，再使用 HTTP 访问后端；后端无需 TLS，也不要求透传公开 `Host` 才能认证。外部 HTTPS 仍需 `BABA_SHARE_SECURE_COOKIE=1`：它只是浏览器 Cookie 的 Secure 属性，与代理到后端使用 HTTP 不冲突。端口预检只能检查当时占用，绑定仍可能竞态失败；应查明占用原因，不得随意终止陌生进程。
 
 `--check` **不是只读检查**：会创建数据目录/持锁文件、检查 SQLite、初始化新库或执行兼容迁移。它先取得操作系统实例锁，同一数据根已有实例运行时会在数据库迁移前拒绝。锁文件保留是正常行为，锁随进程退出释放，不要删除锁文件来绕过互斥。
 
@@ -48,7 +52,7 @@
 ```powershell
 py -3 -c "import sys,sqlite3; assert sys.version_info >= (3,12); print(sys.executable); print(sqlite3.sqlite_version)"
 $env:BABA_SHARE_DATA_DIR = 'D:/baba-share-data'
-$env:BABA_SHARE_HOST = '127.0.0.1'
+$env:BABA_SHARE_HOST = '0.0.0.0'
 $env:BABA_SHARE_PORT = '8080'
 # 下两行会初始化或迁移所选数据库，已有数据须先完成一致性备份。
 py -3 server.py --check
@@ -78,7 +82,7 @@ py -3 server.py
 # 可选覆盖，按实际机器调整；不要把密钥写入命令。
 $env:BABA_SHARE_PYTHON = 'C:/Program Files/Python313/python.exe'
 $env:BABA_SHARE_DATA_DIR = 'D:/baba-share-data'
-$env:BABA_SHARE_HOST = '127.0.0.1'
+$env:BABA_SHARE_HOST = '0.0.0.0'
 $env:BABA_SHARE_PORT = '8080'
 $env:BABA_SHARE_PUBLIC_ORIGIN = 'http://127.0.0.1:8080'
 $env:BABA_SHARE_SECURE_COOKIE = '0'
@@ -86,9 +90,9 @@ $env:BABA_SHARE_SECURE_COOKIE = '0'
 Get-Service babaShare
 ```
 
-脚本确认后预检、注册 NSSM、设置自动启动和 LocalService、写入服务级数据根/监听/公开来源/Cookie环境、配置日志轮转和退出重启、启动并检查服务状态及监听连接。项目和解释器参数独立设置，路径含空格不需手工拼嵌套引号。失败时尝试只移除本次创建的服务注册，**保留数据库、master、配置、文件、ACL和日志**；回滚也失败时打印警告，须人工核查，不能直接重复覆盖服务。
+脚本确认后预检、注册 NSSM、设置自动启动和 LocalService、写入服务级数据根/监听/公开来源/Cookie环境、配置日志轮转和退出重启。启动后最多15秒等待SCM Running状态，再做一次有5秒请求超时的HTTP主页检查；NSSM wrapper Running不代表Python已完成初始化，这不是应用就绪轮询。**HTTP未就绪时返回失败，但保留已注册服务与日志，不停止/移除可能仍在正常初始化的服务**，并显示“服务已注册但HTTP未就绪”的诊断信息；请检查日志、初始化耗时、账号权限、端口与实际主页后判断，不能重复安装覆盖。项目和解释器参数独立设置，路径含空格不需手工拼嵌套引号。仅注册成功后的配置/SCM启动阶段失败时尝试移除本次创建的服务注册，**保留数据库、master、配置、文件、ACL和日志**；回滚也失败时打印警告，须人工核查。
 
-脚本的 `DATA_DIR/HOST/PORT/PUBLIC_ORIGIN/SECURE_COOKIE` 使用安装终端传入值或脚本默认值，并固定写入 NSSM `AppEnvironmentExtra`，因此覆盖项目 `.env` 的同名配置；默认空公开来源由应用根据监听推导。其他应用配置放项目根 `.env`，不要只依赖安装终端中的临时变量（这些未自动持久化到服务）。NSSM不读取你登录用户的环境。修改已安装服务的持久环境前先备份并确认，管理员可使用 NSSM 参数编辑后重启；不要通过再次运行安装脚本覆盖既有服务。
+脚本的 `DATA_DIR/HOST/PORT/PUBLIC_ORIGIN/SECURE_COOKIE` 使用安装终端传入值或脚本默认值，并固定写入 NSSM `AppEnvironmentExtra`，因此覆盖项目 `.env` 的同名配置；默认监听 `0.0.0.0`，空公开来源由应用回退为 `http://127.0.0.1:端口`；外部访问时须显式配置真实 IP/域名。其他应用配置放项目根 `.env`，不要只依赖安装终端中的临时变量（这些未自动持久化到服务）。由SCM启动的NSSM不继承你当前登录终端的进程环境；它使用服务启动环境与显式 `AppEnvironmentExtra`。修改已安装服务的持久环境前先备份并确认，管理员可使用 NSSM 参数编辑后重启；不要通过再次运行安装脚本覆盖既有服务。
 
 日志位于 `<DATA_DIR>\logs\stdout.log` 和 `stderr.log`。NSSM 启用启动及在线轮转，阈值10MiB/86400秒；轮转时机遵循安装的NSSM版本语义，不保证精确时间触发。历史轮转文件**不自动删除**，需监控磁盘、按经批准的保留策略归档。日志和预览票据有敏感性，不向普通用户开放；发布访问日志时必须脱敏。
 
@@ -111,7 +115,7 @@ Get-Service babaShare
 ```bash
 python3 -c 'import sys,sqlite3; assert sys.version_info >= (3,12); print(sys.executable)'
 export BABA_SHARE_DATA_DIR=/srv/baba-share-data
-export BABA_SHARE_HOST=127.0.0.1
+export BABA_SHARE_HOST=0.0.0.0
 export BABA_SHARE_PORT=8080
 python3 server.py --check
 python3 server.py
@@ -121,7 +125,7 @@ python3 server.py
 
 ## 5. Docker Compose
 
-要求管理员已安装 Docker Engine 与 Compose 插件。默认只发布宿主 `127.0.0.1:8080` 到容器 `8080`，公开来源默认 `http://127.0.0.1:8080`。容器内 `0.0.0.0` 不等于宿主端口应向所有网卡公开。Dockerfile只EXPOSE一个端口，健康检查只请求唯一服务的 `/baba-share/`。
+要求管理员已安装 Docker Engine 与 Compose 插件。默认发布宿主 `0.0.0.0:8080` 到容器 `8080`，容器内同样监听 `0.0.0.0`；公开来源仍默认 `http://127.0.0.1:8080`，不是 `http://0.0.0.0`。本机可直接访问，其他设备需使用宿主真实 IP/域名并显式设置公开来源。通配发布不会自动放行防火墙，应由管理员限制预定访问范围；仅本机反向代理可显式设 `BABA_SHARE_PUBLISH_IP=127.0.0.1`。Dockerfile只EXPOSE一个端口，健康检查只请求唯一服务的 `/baba-share/`。
 
 在项目目录执行：
 
@@ -140,10 +144,10 @@ docker compose logs --tail=100 baba-share
 Compose宿主端口单独配置（不是容器内 `BABA_SHARE_PORT`）：
 
 ```dotenv
-BABA_SHARE_PUBLISH_IP=127.0.0.1
+BABA_SHARE_PUBLISH_IP=0.0.0.0
 BABA_SHARE_PUBLISH_PORT=18080
 # 未显式设置时，默认公开来源随发布端口变为http://127.0.0.1:18080。
-# 非本机访问或HTTPS必须显式填写真实公开来源。
+# 非本机访问或HTTPS应显式填写真实公开来源，以生成可访问的分享/预览URL。
 # BABA_SHARE_PUBLIC_ORIGIN=https://share.example.com
 BABA_SHARE_SECURE_COOKIE=0
 BABA_SHARE_VOLUME_NAME=baba-share-data
@@ -162,16 +166,88 @@ Windows Docker Desktop 可用 `D:/baba-share-data:/var/lib/baba-share`，先确�
 
 ## 6. 单上游 HTTPS 反向代理
 
-只需一个域名、一个HTTP上游，例如浏览器 `https://share.example.com`，上游 `http://127.0.0.1:8080`（示例需替换为实际地址）。设置：
+只需一个公开域名、一个 HTTP 上游：**浏览器 HTTPS → Nginx 终止 TLS → HTTP 后端**。以下是同机代理的**显式可选加固配置**，不是默认监听：将后端从 `0.0.0.0` 限制为 `127.0.0.1`，仅向本机代理开放。例如浏览器 `https://share.example.com`，上游 `http://127.0.0.1:8080`（示例需替换为实际地址）。后端无需证书或 HTTPS 监听，配置：
 
 ```dotenv
+BABA_SHARE_HOST=127.0.0.1
+BABA_SHARE_PORT=8080
 BABA_SHARE_PUBLIC_ORIGIN=https://share.example.com
 BABA_SHARE_SECURE_COOKIE=1
 ```
 
-代理将 `/baba-share/`（包括preview所有子路径）和 `/api/baba-share/core/v1/` 原样转发至同一个上游。保持浏览器实际 `Host`，传递 `Authorization`，不要记录该头、Cookie、密钥或带预览票据的完整路径；禁用预览/API的共享缓存。不要剥离/覆盖 CSP、`Cache-Control`、`Set-Cookie` 等安全响应头，不添加 `allow-same-origin`、宽松CORS，不单独将 `filedb/` 发布为静态站。让应用设置响应安全策略，浏览器端必须实测raw预览直接打开、iframe、相对资源和恶意预览无法读取主站状态。
+Compose 如采用上述同机代理加固，保留容器内 `0.0.0.0:8080`，并显式设置 `BABA_SHARE_PUBLISH_IP=127.0.0.1` 使宿主仅发布 `127.0.0.1:8080`；未设置时仍为默认通配发布，不要把上面原生监听设置误用于容器。公开来源用于生成可访问的分享/预览链接，不是域名访问白名单，配错不会因 Host/Origin 不匹配阻断正常代理登录/退出。Secure Cookie 由浏览器按外部 HTTPS 处理，不要求 Nginx 到上游也使用 HTTPS。
 
-上游优先绑定loopback，只向代理开放；跨机代理时通过受控私网与防火墙限制，TLS证书必须被客户端信任。MCP同域同端口，无需第二监听或第二域名；详见 `MCP-README.md`。
+下面是可放入 Nginx `http {}` 内（或被该上下文 include 的配置文件）的单上游示例。替换域名、证书路径；先检查是否已有同端口 `default_server`，合并而非重复声明。`ssl_reject_handshake` 需要 Nginx 1.19.4+，请使用支持该指令的版本。限流参数只是入口基线，按并发、共享出口和上传批次调整：
+
+```nginx
+# 位于 http 上下文；按客户端 IP 做入口限流。
+limit_req_zone $binary_remote_addr zone=baba_share_per_ip:10m rate=20r/s;
+
+# 未知域名不得进入业务上游。
+server {
+    listen 80 default_server;
+    server_name _;
+    return 444;
+}
+
+server {
+    listen 443 ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+    return 444;
+}
+
+server {
+    listen 80;
+    server_name share.example.com;
+    return 308 https://share.example.com$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name share.example.com;
+
+    ssl_certificate /etc/nginx/tls/share.example.com/fullchain.pem;
+    ssl_certificate_key /etc/nginx/tls/share.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    # 同时约束 HTTP Host，避免合法 SNI 搭配未知 Host 进入业务。
+    if ($host != share.example.com) {
+        return 444;
+    }
+
+    client_max_body_size 64m;
+    limit_req zone=baba_share_per_ip burst=40 nodelay;
+    limit_req_status 429;
+
+    # 默认访问日志可能包含分享/预览票据；需日志时先设计脱敏格式。
+    access_log off;
+
+    location / {
+        # 不追加 URI，不改写业务路径，主站/API/MCP/预览均转至同一上游。
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+
+        # 规范转发供运维使用；不是应用认证或来源准入的必要条件。
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header Authorization $http_authorization;
+
+        proxy_cache off;
+        proxy_read_timeout 120s;
+    }
+}
+```
+
+网关负责公开域名准入、TLS 和入口限流，应用仍负责认证及角色/工作区权限。**上述示例不是完整的 CSRF 来源策略**：缺少 Fetch Metadata 的旧浏览器/客户端不会在后端做精确 Origin 比对；若要支持使用 Cookie 的旧浏览器，应由网关补充与实际公开域名对应的 Origin 允许策略，并区分无 Origin 的可信非浏览器客户端，不能把域名准入等同于浏览器来源验证。上述示例不代表已修改或验收任何线上 Nginx。应用不盲目信任 `X-Forwarded-*`；示例覆盖客户端自带转发头，仅适用于直接对客户端的这一层网关，前面还有负载均衡时应由管理员另行配置可信代理范围。建议保留实际 `Host` 等规范转发头便于运维，但即使上游 Host 为内部地址，也不需要靠伪造公开 Host 才能通过登录/退出。
+
+代理必须原样保留 `/baba-share/`（含 preview 所有子路径）和 `/api/baba-share/core/v1/`。传递 `Authorization`，不要记录该头、Cookie、密钥或带票据的完整路径；禁用预览/API 的共享缓存。不要使用 `proxy_hide_header` 等剥离/覆盖 CSP、`Cache-Control`、`Set-Cookie` 等上游安全响应头，不添加 `allow-same-origin` 或宽松 CORS，不单独将 `filedb/` 发布为静态站。让应用设置响应安全策略，浏览器端必须实测 raw 预览直接打开、iframe、相对资源和恶意预览无法读取主站状态。
+
+上游优先绑定 loopback，只向代理开放；跨机代理时通过受控私网与防火墙限制。TLS 证书必须被客户端信任。MCP 同域同端口，无需第二监听或第二域名；详见 `MCP-README.md`。
 
 ## 7. 升级、备份与恢复
 
@@ -187,21 +263,21 @@ BABA_SHARE_SECURE_COOKIE=1
 
 - **路径/权限**：核对绝对数据根、服务账号、Python/代码/NSSM访问、宿主ACL/UID和共享设置。不要清空数据、自动放宽权限或换空目录。
 - **端口冲突**：原生只调整 `BABA_SHARE_PORT` 及对应公开Origin；Compose只调整宿主发布端口和公开Origin。先识别占用者，不擅自杀进程。
-- **两库同时存在、损坏、锁等待**：停止写入，完整备份，人工在副本检查；不自动合并，不删除SQLite/WAL/SHM或锁文件试探。
+- **发现历史库、数据库损坏、锁等待**：停止写入，完整备份，人工在副本检查；历史库会安全阻断启动，绝不自动读取、合并、替换或删除。不要删除SQLite/WAL/SHM或锁文件试探，也不要换空目录绕过保护。
 - **MCP master缺失/异常**：恢复数据库对应的原始32字节主密钥，不生成替代密钥，不仅恢复数据库。保护Windows ACL；POSIX `0600`不能验证它。
-- **预览/Origin拒绝**：核对浏览器实际Origin、代理Host、安全响应头和票据有效期，不能通过移除sandbox、放宽CORS或改双端口绕过。
+- **登录/退出 403 或预览拒绝**：先区分网关域名/限流拒绝、业务权限不足与应用来源防护；检查 `Origin: null`、明确跨站浏览器请求、安全响应头和票据有效期。`PUBLIC_ORIGIN` 不绑定请求 Host/Origin，配置不匹配不是正常代理登录/退出被拒绝的理由；不要用移除 sandbox、放宽 CORS 或双端口绕过。会话丢失时检查浏览器实际 HTTPS 与 Secure Cookie；生成链接错误时再校正公开来源。
 - **空间或日志增长**：监控完整数据根与卷容量，按授权策略归档。应用/卸载脚本不会删除用户文件或历史日志。
 - **依赖缺失**：明确列出管理员需安装的Python/SQLite/Docker/NSSM，不能静默下载或安装系统软件。
 
 验收清单：
 
 - [ ] `--check` 使用预期绝对数据根并成功，已理解其数据库初始化/迁移副作用。
-- [ ] 日志中的库路径、旧库选择与稳定卷名正确；仅一个HTTP监听端口。
-- [ ] 初始化/登录、工作区保存读取、相对资源预览和MCP只读调用可用。
+- [ ] 日志中的唯一运行库 `data/baba-share.sqlite3`、绝对数据根与稳定卷名正确；历史库安全阻断；仅一个HTTP监听端口。
+- [ ] 通过外部 HTTPS → HTTP 上游完成初始化/登录/退出、工作区保存读取、相对资源预览和 MCP 只读调用；未登录 401 导航正常。
 - [ ] raw预览响应CSP和iframe沙箱均保留，主站Cookie/DOM/存储不能被预览读取。
 - [ ] 重启服务/容器后数据库、filedb、master仍在同一数据根。
 - [ ] Windows已在目标机器核对LocalService账号、SCM自动启动、服务路径/ACL、日志轮转与已停止服务卸载。
 - [ ] 备份副本完成一致性恢复验证，主密钥与数据库配套。
-- [ ] 宿主端口仅绑定预定网卡，公开Origin、TLS、Cookie和代理转发一致。
+- [ ] 宿主端口仅向预定网关开放；网关拒绝未知域名并执行 TLS/入口限流；公开来源生成的分享/预览 URL 可访问，外部 HTTPS 的 Cookie 带 Secure。
 
 交给Codex等部署助手时，先确认目标系统、代码绝对路径、现有实例/数据根或卷名、唯一端口、一个公开Origin、TLS方案和账号；不明确就询问。未经授权不停止既有服务、改配置/ACL、迁移数据、删卷或注册服务。报告实际命令、退出码、测试数据路径及未执行项；没有Docker必须写“镜像构建与容器运行未执行”，没有SCM实测必须写明。测试仅使用临时目录和随机端口，**不得指定真实 `data/`、`filedb/` 或 `.validation/` 为测试目录**。

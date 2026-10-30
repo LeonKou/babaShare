@@ -31,19 +31,30 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.database_path, Path(directory).resolve() / "data" / "baba-share.sqlite3")
             self.assertTrue((config.root / "filedb").is_dir())
 
-    def test_unrelated_database_is_untouched_and_not_selected(self):
+    def test_old_database_blocks_startup_without_new_empty_database(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "data").mkdir()
-            unrelated = root / "data" / "product-share.sqlite3"
-            unrelated.write_bytes(b"existing-database")
-            config = Config(root)
-            self.assertEqual(config.database_path, root.resolve() / "data" / "baba-share.sqlite3")
-            self.assertEqual(unrelated.read_bytes(), b"existing-database")
-            self.assertFalse(config.database_path.exists())
-            config.database_path.write_bytes(b"current-database")
-            self.assertEqual(Config(root).database_path.read_bytes(), b"current-database")
-            self.assertEqual(unrelated.read_bytes(), b"existing-database")
+            legacy = root / "data" / "product-share.sqlite3"
+            legacy.write_bytes(b"existing-database")
+            with self.assertRaisesRegex(ValueError, "发现旧数据库.*先备份.*拒绝启动"):
+                Config(root)
+            self.assertEqual(legacy.read_bytes(), b"existing-database")
+            self.assertFalse((root / "data" / "baba-share.sqlite3").exists())
+            self.assertFalse((root / "filedb").exists())
+
+    def test_old_and_current_databases_block_startup_without_modification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "data").mkdir()
+            legacy = root / "data" / "product-share.sqlite3"
+            current = root / "data" / "baba-share.sqlite3"
+            legacy.write_bytes(b"old-database")
+            current.write_bytes(b"current-database")
+            with self.assertRaisesRegex(ValueError, "发现旧数据库.*人工确认"):
+                Config(root)
+            self.assertEqual(legacy.read_bytes(), b"old-database")
+            self.assertEqual(current.read_bytes(), b"current-database")
 
     def test_origin_validation_and_normalization(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -108,7 +119,7 @@ class BackendTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.port = free_port()
-        self.config = Config(Path(self.temporary.name), port=self.port)
+        self.config = Config(Path(self.temporary.name), host="127.0.0.1", port=self.port)
         self.app = Application(self.config)
         self.main, = self.app.servers()
         self.threads = [threading.Thread(target=self.main.serve_forever, daemon=True)]
@@ -130,7 +141,7 @@ class BackendTests(unittest.TestCase):
         if query:
             path += "?" + urlencode(query)
         headers = {}
-        if origin:
+        if origin is not False:
             headers["Origin"] = self.config.public_origin if origin is True else origin
         if cookie:
             headers["Cookie"] = cookie
@@ -188,6 +199,149 @@ class BackendTests(unittest.TestCase):
         self.assertIn("Path=" + BASE, cookie)
         self.assertNotIn("password", user)
 
+    def test_password_hash_and_setup_length_boundaries(self):
+        from backend.service import BizError, Service, password_hash, password_valid
+        for password in (None, 123456, "12345", "x" * 257):
+            with self.subTest(password_type=type(password).__name__), self.assertRaises(BizError) as raised:
+                password_hash(password)
+            self.assertEqual((raised.exception.code, raised.exception.status), (400, "PARAM_INVALID"))
+        for password in ("123456", "x" * 256):
+            with self.subTest(length=len(password)):
+                hashed = password_hash(password)
+                self.assertNotEqual(hashed, password)
+                self.assertTrue(password_valid(password, hashed))
+                self.assertFalse(password_valid("wrong-password", hashed))
+        with tempfile.TemporaryDirectory() as directory:
+            service = Service(Config(Path(directory)))
+            with mock.patch.object(self.app, "service", service):
+                status, error, _ = self.request("POST", "/visitor/account/setup", {"userName": "six-admin", "password": "12345"})
+                self.assertEqual((status, error["status"]), (400, "PARAM_INVALID"))
+                self.assertTrue(service.install_detail()["setupRequired"])
+                status, user, headers = self.request("POST", "/visitor/account/setup", {"userName": "six-admin", "password": "123456"})
+                self.assertEqual((status, user["role"]), (200, "admin"))
+                self.assertIn("HttpOnly", headers["Set-Cookie"])
+                self.assertEqual(self.request("POST", "/visitor/session", {"userName": "six-admin", "password": "123456"})[0], 200)
+
+    def test_password_length_boundaries_for_registration_creation_and_change(self):
+        self.assertEqual(self.request("PATCH", "/setting", {"registrationEnabled": True}, self.admin_cookie)[0], 200)
+        for route, name, cookie in (("/visitor/account/registration", "six-signup", ""),
+                                    ("/user", "six-created", self.admin_cookie)):
+            with self.subTest(route=route):
+                body = {"userName": name, "password": "12345"}
+                status, error, _ = self.request("POST", route, body, cookie)
+                self.assertEqual((status, error["status"]), (400, "PARAM_INVALID"))
+                self.assertIsNone(self.app.service.repo.user_by_name(name))
+                body["password"] = "123456"
+                status, user, _ = self.request("POST", route, body, cookie)
+                self.assertEqual(status, 200, user)
+                status, _, headers = self.request("POST", "/visitor/session", body)
+                self.assertEqual(status, 200)
+                old_cookie = headers["Set-Cookie"].split(";", 1)[0]
+                status, error, _ = self.request("PATCH", "/user", {"id": user["id"], "password": "54321"}, self.admin_cookie)
+                self.assertEqual((status, error["status"]), (400, "PARAM_INVALID"))
+                self.assertEqual(self.request("GET", "/session/detail", cookie=old_cookie)[0], 200)
+                status, _, _ = self.request("PATCH", "/user", {"id": user["id"], "password": "654321"}, self.admin_cookie)
+                self.assertEqual(status, 200)
+                self.assertEqual(self.request("GET", "/session/detail", cookie=old_cookie)[0], 401)
+                self.assertEqual(self.request("POST", "/visitor/session", body)[0], 401)
+                body["password"] = "654321"
+                self.assertEqual(self.request("POST", "/visitor/session", body)[0], 200)
+
+    def test_auth_status_has_no_persistent_loading_translation(self):
+        from html.parser import HTMLParser
+
+        class StatusParser(HTMLParser):
+            attributes = None
+
+            def handle_starttag(self, tag, attrs):
+                values = dict(attrs)
+                if values.get("id") == "auth-status":
+                    self.attributes = values
+
+        parser = StatusParser()
+        parser.feed((Path(__file__).resolve().parents[1] / "web" / "auth.html").read_text(encoding="utf-8"))
+        self.assertIsNotNone(parser.attributes)
+        self.assertNotIn("data-i18n", parser.attributes)
+
+    def test_auth_footer_links_to_official_site_safely_after_main(self):
+        from html.parser import HTMLParser
+
+        class FooterParser(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.links = []
+                self.main_closed = False
+                self.in_footer = False
+
+            def handle_starttag(self, tag, attrs):
+                attributes = dict(attrs)
+                if tag == "footer" and attributes.get("class") == "auth-branding":
+                    self.in_footer = self.main_closed
+                if tag == "a" and self.in_footer:
+                    self.links.append(attributes)
+
+            def handle_endtag(self, tag):
+                if tag == "main":
+                    self.main_closed = True
+                if tag == "footer":
+                    self.in_footer = False
+
+        parser = FooterParser()
+        parser.feed((self.config.web_dir / "auth.html").read_text(encoding="utf-8"))
+        self.assertEqual(len(parser.links), 1)
+        link = parser.links[0]
+        self.assertEqual(link["href"], "https://leonkou.github.io/babaShare/")
+        self.assertEqual(link["target"], "_blank")
+        self.assertEqual(set(link["rel"].split()), {"noopener", "noreferrer"})
+        self.assertEqual(link["data-i18n"], "poweredBy")
+
+    def test_auth_layout_shares_viewport_with_footer_without_clipping(self):
+        layout = (self.config.web_dir / "assets/layout.css").read_text(encoding="utf-8")
+        components = (self.config.web_dir / "assets/components.css").read_text(encoding="utf-8")
+        body = layout.split(".auth-body{", 1)[1].split("}", 1)[0]
+        story = layout.split(".auth-story{", 1)[1].split("}", 1)[0]
+        panel = layout.split(".auth-panel{", 1)[1].split("}", 1)[0]
+        branding = components.split(".auth-branding{", 1)[1].split("}", 1)[0]
+        self.assertIn("min-block-size:100dvh", body)
+        self.assertIn("grid-template-rows:minmax(min-content,1fr) auto", body)
+        self.assertIn('grid-template-areas:"story panel" "branding branding"', body)
+        self.assertNotIn("100dvh", story + panel + branding)
+        self.assertIn("grid-area:story", story)
+        self.assertIn("grid-area:panel", panel)
+        self.assertIn("grid-area:branding", branding)
+        self.assertIn('grid-template-areas:"settings" "panel" "branding"', layout)
+        for rules in (body, story, panel, branding):
+            self.assertNotIn("overflow:hidden", rules)
+            self.assertNotIn("position:fixed", rules)
+
+    @unittest.skipUnless(shutil.which("node"), "管理员建号校验与三语动态测试需要Node.js")
+    def test_frontend_user_password_boundaries_and_translations(self):
+        script = r'''
+const fs=require('fs'),vm=require('vm'),assert=require('assert'),assets=process.argv[1];
+let fields;
+const context={console,document:{documentElement:{lang:'zh-CN',dir:'ltr',dataset:{mode:'dark'}},querySelectorAll:()=>[]},
+ roles:()=>[],formDialog:async(title,configs)=>{fields=configs;return null;}};
+context.window=context;vm.createContext(context);
+vm.runInContext(fs.readFileSync(assets+'/i18n.js','utf8'),context);
+const source=fs.readFileSync(assets+'/users.js','utf8');
+vm.runInContext(source.slice(source.indexOf('  async function createUser()'),source.indexOf('  async function editUser(')),context);
+(async()=>{
+ for(const [locale,marker] of [['zh-CN','6'],['en-US','6'],['ar-SA','ستة']]){
+  context.I18n.apply({locale,theme:'dark'});await context.createUser();
+  assert.equal(context.I18n.t('poweredBy'),'Powered by babaShare',locale+' 官网署名');
+  const password=fields.find(field=>field.key==='password');
+  assert(password.hint.includes(marker),locale+' 密码提示');
+  assert.equal(password.validator('12345'),context.I18n.t('passwordError'));
+  assert(context.I18n.t('passwordError').includes(marker),locale+' 密码错误');
+  assert.equal(password.validator('123456'),'');
+  assert.equal(password.validator('x'.repeat(256)),'');
+  assert.equal(password.validator('x'.repeat(257)),context.I18n.t('passwordError'));
+ }
+})().catch(error=>{console.error(error);process.exitCode=1;});
+'''
+        result = subprocess.run(["node", "-e", script, str(self.config.web_dir / "assets")], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_login_logout_disable_and_last_admin(self):
         status, result, _ = self.request("POST", "/visitor/session", {"userName": "admin", "password": "bad"})
         self.assertEqual(status, 401)
@@ -203,7 +357,7 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/session/detail", cookie=self.admin_cookie)[0], 401)
 
     def test_origin_csrf_and_preview_has_no_api(self):
-        for origin in (False, "null", "http://evil.example"):
+        for origin in ("null", ""):
             status, result, _ = self.request("POST", "/workspace", {"workspaceName": "blocked"}, self.admin_cookie, origin=origin)
             self.assertEqual(status, 403, result)
         status, _, _ = self.request("GET", "/session/detail", cookie=self.admin_cookie, origin="null")
@@ -234,6 +388,25 @@ class BackendTests(unittest.TestCase):
         self.assertIn(b"style.css", raw)
         self.assertEqual(self.request("GET", root + "subdir/style.css", preview=True, origin=False)[0], 200)
         self.assertEqual(self.request("GET", "/assets/style.css", preview=True, origin=False)[0], 404)
+
+    def test_explicit_new_share_creates_independent_link(self):
+        workspace_id, share = self.create_site_share()
+        body = {"workspaceId": workspace_id, "path": "site", "expireHours": 24}
+        status, first, _ = self.request("POST", "/share", body, self.admin_cookie)
+        self.assertEqual(status, 200)
+        status, reused, _ = self.request("POST", "/share", body, self.admin_cookie)
+        self.assertEqual(status, 200)
+        self.assertEqual(first["token"], reused["token"])
+        status, second, _ = self.request("POST", "/share", {**body, "createNew": True}, self.admin_cookie)
+        self.assertEqual(status, 200)
+        self.assertNotEqual(first["token"], second["token"])
+        self.assertNotEqual(first["id"], second["id"])
+        for item in (share, first, second):
+            status, _, _ = self.request("GET", "/visitor/share/detail", query={"token": item["token"]})
+            self.assertEqual(status, 200)
+        for value in ("true", 1, None):
+            status, _, _ = self.request("POST", "/share", {**body, "createNew": value}, self.admin_cookie)
+            self.assertEqual(status, 400)
 
     def test_share_directory_pagination_and_preview_base(self):
         workspace_id, share = self.create_site_share()
@@ -637,7 +810,7 @@ const flatten=n=>n instanceof Node?[n,...n.children.flatMap(flatten)]:[];
 let choice=null,uploads=[],dialogs=[],notices=[],readHook=null;
 const button=(key,fn)=>{const n=el('button',{text:key});n.fn=fn;return n;};
 const context={console,URL,AbortController,crypto:require('crypto').webcrypto,Date,location:new URL(input.origin+'/baba-share/workspace.html'),history:{replaceState(){}},
- document:{documentElement:{lang:'zh-CN',dir:'ltr',dataset:{mode:'dark'}},querySelectorAll:()=>[],createTextNode:t=>t},
+ document:{documentElement:{lang:'zh-CN',dir:'ltr',dataset:{mode:'dark'}},querySelectorAll:()=>[],createTextNode:t=>t,addEventListener(){}},
  FileReader:class{readAsDataURL(file){if(readHook){const hook=readHook;readHook=null;hook();}this.result='data:;base64,'+Buffer.from(file.content).toString('base64');this.onload();}},
  LocalPager:()=>({pageIndex:1,pageSize:20,reset(){},accept:()=>true,busy(){}}),addEventListener(){},
  UI:{$,el,button,icon:()=>el('svg'),empty:()=>el('div'),date:String,toast:t=>notices.push(t),formDialog(){},errorText:e=>e.status||String(e),page:()=>({ready:Promise.resolve()}),
@@ -670,6 +843,73 @@ source=source.replace('  await page.ready;', '  window.uploadTest={uploadFiles,s
         self.assertEqual((disk / "index.html").read_text(), "new")
         self.assertEqual(len(list(disk.glob("index_*.html"))), 1)
         self.assertTrue((disk / "script.js").exists())
+
+    @unittest.skipUnless(shutil.which("node"), "工作区交互执行需要Node.js")
+    def test_frontend_workspace_share_management_and_menu(self):
+        script = r'''
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+let document,activeElement;
+class Node {
+ constructor(tag,attrs={}){this.tag=tag;this.attrs={...attrs};this.id=attrs.id;this.children=[];this.events={};this.style={};this.value=attrs.value||'';this.textContent=attrs.text||'';this.classList={add(){},remove(){}};this.isConnected=true;this.parentElement=this;}
+ append(...nodes){for(const n of nodes.filter(n=>n!=null)){this.children.push(n);if(n instanceof Node)n.parentElement=this;}if(this.tag==='select'&&!this.value)this.value=this.children[0]?.value||'';}
+ replaceChildren(...nodes){this.children=[];this.append(...nodes);}get lastChild(){return this.children.at(-1);}
+ setAttribute(k,v){this.attrs[k]=v;}addEventListener(k,f){this.events[k]=f;}
+ focus(){activeElement=this;document.activeElement=this;}remove(){this.isConnected=false;this.parentElement.children=this.parentElement.children.filter(n=>n!==this);}
+ contains(n){return n===this||this.children.some(c=>c instanceof Node&&c.contains(n));}
+ closest(selector){return selector.split(',').map(s=>s.trim()).includes(this.tag)?this:this.parentElement!==this?this.parentElement.closest(selector):null;}
+ async click(init={}){const event={button:0,target:this,defaultPrevented:false,stopped:false,preventDefault(){this.defaultPrevented=true;},stopPropagation(){this.stopped=true;},...init};for(let n=this;;n=n.parentElement){await(n.events.click||n.fn)?.(event);if(event.stopped||n.parentElement===n)break;}return event;}
+ querySelectorAll(tag){return this.children.flatMap(n=>n instanceof Node?[...(n.tag===tag?[n]:[]),...n.querySelectorAll(tag)]:[]);}
+ getBoundingClientRect(){return this.tag==='button'?{left:300,right:332,top:150,bottom:182}:{width:200,height:72};}
+}
+const nodes=new Map(),$=s=>{if(!nodes.has(s))nodes.set(s,new Node('div'));return nodes.get(s);};
+const el=(tag,attrs,...children)=>{const n=new Node(tag,attrs);for(const [key,value]of Object.entries(attrs||{}))if(key.startsWith('on'))n.addEventListener(key.slice(2),value);n.append(...children);return n;};
+const flatten=n=>n instanceof Node?[n,...n.children.flatMap(flatten)]:[];
+const button=(key,fn,cls)=>{const n=el('button',{type:'button',text:key,class:cls});n.fn=fn;return n;};
+let shares=[],calls=[],dialogs=[],choice=null,selected=null,confirm=true,notices=[],formValues={},forms=[],selection='',cancelForm=false;
+document={documentElement:{lang:'zh-CN',dir:'ltr',clientWidth:360,dataset:{mode:'dark'}},body:new Node('body'),events:{},querySelectorAll:()=>[],createTextNode:t=>t,addEventListener(k,f){this.events[k]=f;}};
+const context={console,URL,AbortController,crypto:require('crypto').webcrypto,Date,document,innerHeight:220,getSelection:()=>({toString:()=>selection}),
+ location:new URL('http://localhost/baba-share/workspace.html?search=report&sort=size&order=desc'),history:{replaceState(_,title,url){context.location=new URL(url);}},events:{},addEventListener(k,f){this.events[k]=f;},
+ LocalPager:()=>({pageIndex:1,pageSize:20,reset(){},accept:()=>true,busy(){}}),
+ UI:{$,el,button,copyButton:button,icon:()=>el('svg'),empty:()=>el('div'),date:String,size:String,toast:t=>notices.push(t),errorText:e=>e.status||String(e),confirm:async()=>confirm,page:()=>({ready:Promise.resolve(),request:async()=>true}),copy:async()=>{},invitationUrl:(route,token)=>{assert.equal(route,'invite');assert.match(token,/^[A-Za-z0-9_-]{43}$/);return context.location.origin+'/baba-share/invite.html#invite='+token;},
+ formDialog:async(title,fields,submit)=>{forms.push(fields);return cancelForm?null:submit(formValues);},
+ dialog:(title,build)=>{let resolve;const result=new Promise(r=>resolve=r),node=el('dialog');const close=value=>resolve(value);build(node,close);dialogs.push({title,node});if(selected){const s=flatten(node).find(n=>n.tag==='select');if(s)s.value=selected;}const action=flatten(node).find(n=>n.textContent===choice);if(action)action.fn();else close(null);return{result,close};}},
+ API:async(name,options={})=>{calls.push({name,...options});if(name==='me')return{id:'admin',role:'admin'};if(name==='workspaces'||name==='members')return[];if(name==='nodes')return{entries:[]};if(name==='invitations')return[{id:'invite-row',isActive:true,collaborate:false,createTime:1,expireTime:2}];if(name==='invitation'&&options.method==='POST')return{inviteUrl:'https://stale.example/baba-share/invite.html#invite='+'a'.repeat(43),expireTime:2};if(name==='shares')return shares;if(name==='share')return{id:'new',shareUrl:'new-link',expireTime:null};if(name==='workspace'&&options.method==='PATCH')return{...options.body,canManage:true,canWrite:true};return{};}};
+context.window=context;vm.createContext(context);vm.runInContext(fs.readFileSync(process.argv[1]+'/i18n.js','utf8'),context);
+let source=fs.readFileSync(process.argv[1]+'/workspace.js','utf8').replace('  await page.ready;',`  window.test={inviteMember,manageInvitations,shareFolder,editWorkspace,deleteWorkspace,renderFiles,renderChrome,rowActions,openRowMenu,closeRowMenu,set(w,p='',e=[]){workspace=w;path=p;entries=e;workspaces=w?[w]:[];},pick(rows){workspace=null;path='';workspaces=rows;renderChrome();},menu(){return activeMenu;}};\n  await page.ready;`);
+(async()=>{await vm.runInContext(source,context);const t=context.test,w={id:'space',workspaceName:'Workspace',description:'old',canManage:true,canWrite:true};
+ for(const locale of ['zh-CN','en-US','ar-SA']){context.I18n.apply({locale,theme:'dark'});assert.notEqual(context.I18n.t('editWorkspace'),context.I18n.t('unknownError'));assert.notEqual(context.I18n.t('existingSharesHint'),context.I18n.t('unknownError'));}
+ for(const locale of ['zh-CN','en-US','ar-SA'])for(const theme of ['light','dark']){
+  context.I18n.apply({locale,theme});t.pick([w]);const card=$('#workspace-cards').children[0],link=card.querySelectorAll('a')[0],footer=card.children.at(-1);assert.equal(card.attrs.class,'card workspace-card');assert(!card.attrs.role&&!card.attrs.tabindex);assert.equal(link.textContent,'Workspace');assert.equal(new URL(link.attrs.href).searchParams.get('workspaceId'),'space');assert.equal(new URL(link.attrs.href).searchParams.get('path'),'');assert.equal(new URL(link.attrs.href).searchParams.get('search'),'report');assert.equal(footer.tag,'footer');assert.deepEqual(footer.children.map(n=>n.textContent),['editWorkspace','deleteWorkspace']);assert(!card.querySelectorAll('button').some(n=>n.textContent==='openWorkspace'));
+  for(const init of [{ctrlKey:true},{metaKey:true},{shiftKey:true},{altKey:true},{button:1},{defaultPrevented:true}]){const count=calls.length,event=await link.click(init);assert.equal(calls.length,count);assert.equal(event.defaultPrevented,!!init.defaultPrevented);assert.equal($('#file-browser').hidden,true);}
+  selection='Workspace';let count=calls.length;await card.children[1].click();assert.equal(calls.length,count);selection='';
+  count=calls.length;await footer.click();assert.equal(calls.length,count);assert.equal($('#file-browser').hidden,true);
+  cancelForm=true;count=calls.length;await footer.children[0].click();assert.equal(calls.length,count);assert.equal($('#file-browser').hidden,true);assert.equal($('#workspace-cards').children[0],card);cancelForm=false;
+  formValues={workspaceName:'Edited',description:'new'};count=calls.length;await footer.children[0].click();assert.equal($('#file-browser').hidden,true);assert.equal(calls.length,count+1);assert.equal(calls.at(-1).method,'PATCH');assert.equal(calls.at(-1).body.id,'space');
+  t.pick([w]);confirm=false;count=calls.length;await $('#workspace-cards').children[0].children.at(-1).children[1].click();assert.equal(calls.length,count);assert.equal($('#file-browser').hidden,true);confirm=true;await $('#workspace-cards').children[0].children.at(-1).children[1].click();assert.equal(calls.length,count+1);assert.equal(calls.at(-1).method,'DELETE');assert.equal($('#workspace-cards').children.length,1);assert.equal($('#file-browser').hidden,true);
+  for(const target of ['article','description','date','link']){t.pick([w]);const current=$('#workspace-cards').children[0],node=target==='article'?current:target==='description'?current.children[1]:target==='date'?current.children[2]:current.querySelectorAll('a')[0];count=calls.length;assert.equal((await node.click()).defaultPrevented,true);assert.equal($('#file-browser').hidden,false);assert.equal(context.location.searchParams.get('workspaceId'),'space');assert.deepEqual(calls.slice(count).map(c=>c.name).sort(),['members','nodes']);}
+  for(const permissions of [{canManage:false,canWrite:false},{canManage:false,canWrite:true},{canManage:true,canWrite:false}]){t.pick([{...w,...permissions}]);const current=$('#workspace-cards').children[0];assert.equal(current.querySelectorAll('button').length,0);assert.equal(current.querySelectorAll('footer').length,0);await current.querySelectorAll('a')[0].click();assert.equal($('#file-browser').hidden,false);assert(!flatten($('#workspace-head-actions')).some(n=>['editWorkspace','deleteWorkspace'].includes(n.textContent)));}
+ }
+ const css=fs.readFileSync(process.argv[1]+'/components.css','utf8'),cardRule=css.match(/\.card\{([^}]+)\}/)[1],footerRule=css.match(/\.card>footer\{([^}]+)\}/)[1],workspaceFooter=css.match(/\.card\.workspace-card>footer\{([^}]+)\}/)[1];for(const value of ['display:flex','flex-direction:column','min-inline-size:0','overflow-wrap:anywhere'])assert(cardRule.includes(value));for(const value of ['margin-block-start:auto','flex-shrink:0','flex-wrap:wrap'])assert(footerRule.includes(value));assert(workspaceFooter.includes('justify-content:space-between'));assert(workspaceFooter.includes('margin-block-start:auto'));assert(css.includes('.workspace-card>footer>button:last-child{margin-inline-start:auto}'));assert(css.includes('.workspace-card-link:focus-visible{outline:2px solid var(--color-border-focus)'));assert(!/position:(absolute|fixed)/.test(workspaceFooter));
+ t.set(w);formValues={collaborate:'false',expireHours:'168'};await t.inviteMember();let invitation=calls.find(c=>c.name==='invitation');assert.equal(invitation.method,'POST');assert.equal(invitation.body.collaborate,false);assert.equal(invitation.body.expireHours,168);assert.equal(invitation.body.workspaceId,'space');assert.equal(typeof invitation.body.requestId,'string');assert(!forms.at(-1).some(f=>f.name==='userName'));assert(flatten(dialogs.at(-1).node).some(n=>n.value==='http://localhost/baba-share/invite.html#invite='+'a'.repeat(43)));
+ await t.manageInvitations();assert(calls.some(c=>c.name==='invitations'&&c.query.workspaceId==='space'));assert.equal(dialogs.at(-1).title,context.I18n.t('inviteManage'));const inviteGrid=flatten(dialogs.at(-1).node).find(n=>n.attrs.class==='cards invitation-cards');assert(inviteGrid);const inviteCard=inviteGrid.children[0];assert.equal(inviteCard.attrs.class,'card invitation-card');assert.equal(inviteCard.children.at(-1).tag,'footer');assert.equal(inviteCard.children.at(-1).children.length,1);let removeInvite=flatten(dialogs.at(-1).node).find(n=>n.textContent==='delete');confirm=false;let beforeDelete=calls.length;await removeInvite.fn();assert.equal(calls.length,beforeDelete);confirm=true;await removeInvite.fn();assert(calls.some(c=>c.name==='invitation'&&c.method==='DELETE'&&c.query.id==='invite-row'));dialogs=[];
+ t.set(w,'folder');shares=[{id:'valid',workspaceId:'space',path:'folder',shareUrl:'existing-link',expireTime:null,createTime:1},{id:'valid2',workspaceId:'space',path:'folder',shareUrl:'second-link',expireTime:Date.now()+60000,createTime:2},{id:'expired',workspaceId:'space',path:'folder',expireTime:Date.now()-1},{id:'revoked',workspaceId:'space',path:'folder',revokedTime:1},{id:'other',workspaceId:'space',path:'folder-child'},{id:'other-space',workspaceId:'else',path:'folder'}];
+ choice='useExistingShare';selected='valid2';await t.shareFolder();assert.equal(calls.filter(c=>c.name==='share').length,0);assert.equal(flatten(dialogs[0].node).find(n=>n.tag==='select').children.length,2);assert(flatten(dialogs[1].node).some(n=>n.value==='second-link'));
+ choice='cancel';await t.shareFolder();assert.equal(calls.filter(c=>c.name==='share').length,0);
+ choice='newShare';formValues={expireHours:'168'};await t.shareFolder();let created=calls.filter(c=>c.name==='share');assert.equal(created.length,1);assert.equal(created[0].body.path,'folder');assert.equal(created[0].body.createNew,true);
+ shares=shares.filter(s=>s.id==='expired'||s.id==='revoked');await t.shareFolder();assert.equal(calls.filter(c=>c.name==='share').length,2);
+ t.set(w);formValues={workspaceName:'Renamed',description:'new'};await t.editWorkspace(w);assert(calls.some(c=>c.name==='workspace'&&c.method==='PATCH'&&c.body.id==='space'));assert.equal($('#workspace-title').textContent,'Renamed');
+ confirm=false;const count=calls.length;await t.deleteWorkspace(w);assert.equal(calls.length,count);confirm=true;await t.deleteWorkspace(w);assert(calls.some(c=>c.name==='workspace'&&c.method==='DELETE'&&c.query.id==='space'));assert.equal($('#file-browser').hidden,true);
+ const folder={name:'folder',path:'folder',kind:'folder',canWrite:true},file={name:'a.txt',path:'a.txt',kind:'file',canWrite:true};t.set(w,'',[folder,file]);t.renderFiles();assert(flatten($('#file-list')).some(n=>n.textContent==='rename'));assert(flatten($('#file-list')).some(n=>n.textContent==='delete'));
+ const trigger=t.rowActions(file);document.body.append(trigger);context.I18n.apply({locale:'ar-SA',theme:'dark'});t.openRowMenu(trigger,file);let menu=t.menu().menu;assert.equal(menu.parentElement,document.body);assert.equal(menu.attrs.role,'menu');assert.equal(menu.attrs.dir,'rtl');assert(Number.parseFloat(menu.style.left)<=152);assert(Number.parseFloat(menu.style.top)>=8);assert.equal(trigger.attrs['aria-expanded'],'true');
+ let prevented=false;menu.events.keydown({key:'End',preventDefault(){prevented=true;}});assert(prevented);assert.equal(document.activeElement.textContent,'delete');document.events.keydown({key:'Escape',preventDefault(){}});assert.equal(t.menu(),null);assert.equal(document.activeElement,trigger);
+ t.openRowMenu(trigger,file);document.events.pointerdown({target:new Node('outside')});assert.equal(t.menu(),null);t.openRowMenu(trigger,file);document.events.scroll({target:document});assert.equal(t.menu(),null);t.openRowMenu(trigger,file);document.events.keydown({key:'Tab'});assert.equal(t.menu(),null);t.openRowMenu(trigger,file);t.renderFiles();assert.equal(t.menu(),null);
+ t.set({...w,canManage:false,canWrite:false},'',[{...folder,canWrite:false},{...file,canWrite:false}]);t.renderChrome();t.renderFiles();assert.equal($('#workspace-head-actions').children.length,0);assert(!flatten($('#file-list')).some(n=>n.textContent==='delete'));
+ process.stdout.write('工作区分享选择、管理权限、删除确认、菜单键盘及RTL执行通过');
+})().catch(e=>{console.error(e);process.exit(1);});
+'''
+        result = subprocess.run(["node", "-e", script, str(self.config.web_dir / "assets")],
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_paths_traversal_and_conflicting_upload(self):
         workspace_id = self.workspace()

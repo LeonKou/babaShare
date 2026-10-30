@@ -63,6 +63,15 @@ CREATE TABLE IF NOT EXISTS workspace_member (
  UNIQUE(workspace_id,user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_workspace_member_user_id ON workspace_member(user_id);
+CREATE TABLE IF NOT EXISTS workspace_invitation (
+ id BLOB PRIMARY KEY, workspace_id BLOB NOT NULL, creator_id BLOB NOT NULL,
+ invitation_hash TEXT NOT NULL, request_id TEXT NOT NULL, request_hash TEXT NOT NULL,
+ is_collaborate INTEGER NOT NULL DEFAULT 0, expire_time BIGINT NOT NULL,
+ create_time BIGINT NOT NULL, update_time BIGINT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_workspace_invitation_hash ON workspace_invitation(invitation_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_workspace_invitation_request ON workspace_invitation(creator_id,request_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_invitation_workspace_time ON workspace_invitation(workspace_id,create_time);
 CREATE TABLE IF NOT EXISTS workspace_node (
  id BLOB PRIMARY KEY, workspace_id BLOB NOT NULL, node_path TEXT NOT NULL,
  node_kind TEXT NOT NULL, owner_id BLOB NOT NULL,
@@ -112,6 +121,7 @@ class Repository:
     def connection(self):
         connection = sqlite3.connect(self.path, timeout=15)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA secure_delete=ON")
         try:
             yield connection
             connection.commit()

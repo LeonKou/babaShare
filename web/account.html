@@ -25,11 +25,17 @@
           </p>
         </div>
       </header>
-      <section class="section" aria-labelledby="profile-title">
-        <h2 class="sr-only" id="profile-title" data-i18n="profile">账户资料</h2>
+      <div id="account-tabs" class="account-tabs" role="tablist" aria-label="个人中心功能" data-i18n-label="accountTabs" aria-orientation="horizontal">
+        <button id="account-tab-profile" type="button" role="tab" aria-controls="account-panel-profile" aria-selected="true" tabindex="0" data-i18n="profile">账户资料</button>
+        <button id="account-tab-keys" type="button" role="tab" aria-controls="account-panel-keys" aria-selected="false" tabindex="-1" data-i18n="mcpKeys">MCP Key</button>
+        <button id="account-tab-shares" type="button" role="tab" aria-controls="account-panel-shares" aria-selected="false" tabindex="-1" data-i18n="myShares">我的分享</button>
+      </div>
+      <div id="account-status" class="status-line" role="status" aria-live="polite"></div>
+      <section id="account-panel-profile" class="account-panel" role="tabpanel" aria-labelledby="account-tab-profile" tabindex="0">
+        <h2 id="profile-title" data-i18n="profile">账户资料</h2>
         <div id="profile-summary" class="profile-summary"></div>
       </section>
-      <section class="section" aria-labelledby="mcp-title">
+      <section id="account-panel-keys" class="account-panel" role="tabpanel" aria-labelledby="account-tab-keys" tabindex="0" hidden>
         <header class="page-head">
           <div>
             <h2 id="mcp-title" data-i18n="mcpKeys">MCP Key</h2>
@@ -52,15 +58,9 @@
         <div id="mcp-cards" class="cards"></div>
         <div id="mcp-empty" hidden></div>
       </section>
-      <section aria-labelledby="share-list-title">
+      <section id="account-panel-shares" class="account-panel" role="tabpanel" aria-labelledby="account-tab-shares" tabindex="0" hidden>
         <h2 id="share-list-title" data-i18n="myShares">我的分享</h2>
         <div id="share-pagination" class="pagination"></div>
-        <div
-          id="account-status"
-          class="status-line"
-          role="status"
-          aria-live="polite"
-        ></div>
         <div id="share-cards" class="cards"></div>
         <div id="share-empty" hidden></div>
       </section>

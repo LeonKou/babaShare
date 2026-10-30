@@ -1,10 +1,13 @@
 (async () => {
   "use strict";
   const { $, el, button, field, validate, errorText, settingsControls } = UI;
+  const inviteToken = UI.invitationToken();
   let mode = "login",
     state = null;
   const form = $("#auth-form"),
-    status = $("#auth-status");
+    status = $("#auth-status"),
+    logoutFailed = new URL(location.href).searchParams.get("logout") === "failed";
+  $("#auth-submit").disabled = true;
   settingsControls($("#auth-settings"));
   $("#security-icon").append(UI.icon("shield"));
   function render() {
@@ -24,7 +27,8 @@
     $("#auth-title").dataset.i18n = title;
     $("#auth-title").textContent = I18n.t(title);
     $("#auth-hint").dataset.i18n = hint;
-    $("#auth-hint").textContent = I18n.t(hint);
+    $("#auth-hint").dataset.i18n = inviteToken ? "inviteLoginHint" : hint;
+    $("#auth-hint").textContent = I18n.t(inviteToken ? "inviteLoginHint" : hint);
     $("#auth-story-title").textContent = I18n.t("authStoryTitle").replaceAll(
       "\\n",
       "\n",
@@ -52,7 +56,7 @@
       required: true,
       hint: mode === "login" ? "" : I18n.t("passwordHint"),
       validator: (value) =>
-        mode !== "login" && (value.length < 10 || value.length > 256)
+        mode !== "login" && (value.length < 6 || value.length > 256)
           ? I18n.t("passwordError")
           : "",
     });
@@ -74,6 +78,7 @@
     if (
       state &&
       !state.setupRequired &&
+      !inviteToken &&
       (state.registrationEnabled || mode === "registration")
     )
       $("#auth-switch").append(
@@ -104,7 +109,8 @@
     try {
       const body = Object.fromEntries(new FormData(form));
       await API(mode, { method: "POST", body });
-      location.href = UI.routeUrl("shell");
+      location.href = inviteToken && mode === "login"
+        ? UI.invitationUrl("invite", inviteToken) : UI.routeUrl("shell");
     } catch (e) {
       status.textContent = errorText(e);
       status.classList.add("error");
@@ -115,17 +121,21 @@
   });
   try {
     state = await API("install");
-    mode = state.setupRequired
+    mode = inviteToken ? "login" : state.setupRequired
       ? "setup"
       : new URL(location.href).searchParams.get("mode") === "register" &&
           state.registrationEnabled
         ? "registration"
         : "login";
-    status.textContent = "";
+    status.textContent = logoutFailed ? I18n.t("logoutUnconfirmed") : "";
     render();
+    $("#auth-submit").disabled = false;
   } catch (e) {
     status.classList.add("error");
-    status.textContent = errorText(e);
+    status.textContent = [
+      logoutFailed ? I18n.t("logoutUnconfirmed") : "",
+      errorText(e),
+    ].filter(Boolean).join(" ");
     $("#auth-submit").disabled = true;
     $("#auth-switch").append(button("retry", () => location.reload()));
   }

@@ -14,13 +14,16 @@ services:
       BABA_SHARE_HOST: 0.0.0.0
       BABA_SHARE_DATA_DIR: /var/lib/baba-share
       BABA_SHARE_PORT: "8080"
+      # 仅构造外部分享/预览URL，不绑定请求Host/Origin；公开部署应填写实际外部来源。
       BABA_SHARE_PUBLIC_ORIGIN: ${BABA_SHARE_PUBLIC_ORIGIN:-http://127.0.0.1:${BABA_SHARE_PUBLISH_PORT:-8080}}
+      # 网关HTTPS终止、上游HTTP时仍设1；仅控制浏览器Cookie的Secure属性。
       BABA_SHARE_SECURE_COOKIE: ${BABA_SHARE_SECURE_COOKIE:-0}
       BABA_SHARE_SESSION_HOURS: ${BABA_SHARE_SESSION_HOURS:-24}
       BABA_SHARE_TICKET_SECONDS: ${BABA_SHARE_TICKET_SECONDS:-900}
       BABA_SHARE_MAX_BODY_BYTES: ${BABA_SHARE_MAX_BODY_BYTES:-67108864}
     ports:
-      - "${BABA_SHARE_PUBLISH_IP:-127.0.0.1}:${BABA_SHARE_PUBLISH_PORT:-8080}:8080"
+      # 默认发布到所有IPv4网卡；仅本机代理可显式设PUBLISH_IP=127.0.0.1。
+      - "${BABA_SHARE_PUBLISH_IP:-0.0.0.0}:${BABA_SHARE_PUBLISH_PORT:-8080}:8080"
     volumes:
       - baba-share-data:/var/lib/baba-share
 

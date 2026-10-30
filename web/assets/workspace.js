@@ -9,12 +9,15 @@
     entries = [],
     path = "",
     requestId = 0,
+    memberRequestId = 0,
     controller = null,
     query = "",
     sort = "name",
     ascending = true,
     uploading = false,
-    alwaysOverwrite = false;
+    alwaysOverwrite = false,
+    sharing = false,
+    activeMenu = null;
   const pager = LocalPager($("#file-pagination"), loadFiles, { remote: true });
   const isHtml = (name) => /\.html?$/i.test(name);
   const join = (a, b) => (a ? `${a}/${b}` : b);
@@ -121,6 +124,45 @@
       await selectWorkspace(result.id);
     }
   }
+  async function editWorkspace(target) {
+    const result = await formDialog(
+      I18n.t("editWorkspace"),
+      [
+        { key: "workspaceName", required: true, value: target.workspaceName,
+          validator: (value) => value.trim().length > 100 ? I18n.t("invalidInput") : "" },
+        { key: "workspaceDescription", name: "description", type: "textarea", value: target.description,
+          validator: (value) => value.length > 500 ? I18n.t("invalidInput") : "" },
+      ],
+      (values) => API("workspace", { method: "PATCH", body: { id: target.id, ...values } }),
+    );
+    if (!result) return;
+    workspaces = workspaces.map((item) => item.id === target.id ? result : item);
+    if (workspace?.id === target.id) workspace = result;
+    renderChrome();
+    notifyChanged();
+  }
+  async function deleteWorkspace(target) {
+    if (!(await UI.confirm(I18n.t("deleteWorkspaceConfirm", { name: target.workspaceName })))) return;
+    try {
+      await API("workspace", { method: "DELETE", query: { id: target.id } });
+      workspaces = workspaces.filter((item) => item.id !== target.id);
+      if (workspace?.id === target.id) {
+        controller?.abort();
+        ++requestId;
+        workspace = null;
+        members = [];
+        entries = [];
+        path = "";
+        alwaysOverwrite = false;
+        pager.reset();
+      }
+      renderChrome();
+      updateUrl();
+      notifyChanged();
+    } catch (e) {
+      toast(errorText(e));
+    }
+  }
   async function selectWorkspace(id) {
     if (workspace?.id !== id) alwaysOverwrite = false;
     workspace = workspaces.find((w) => w.id === id) || null;
@@ -131,6 +173,7 @@
     if (workspace) await Promise.all([loadFiles(), loadMembers()]);
   }
   function renderChrome() {
+    closeRowMenu();
     crumbs();
     const picking = !workspace;
     $("#workspace-picker").hidden = !picking;
@@ -161,6 +204,11 @@
       $("#workspace-head-actions").append(
         button("newWorkspace", createWorkspace, "primary", "plus"),
       );
+    if (workspace?.canManage && workspace.canWrite)
+      $("#workspace-head-actions").append(
+        button("editWorkspace", () => editWorkspace(workspace), "", "edit"),
+        button("deleteWorkspace", () => deleteWorkspace(workspace), "danger"),
+      );
     if (workspace?.canWrite)
       $("#workspace-head-actions").append(
         button("share", shareFolder, "primary", "share"),
@@ -174,14 +222,28 @@
       );
     $("#drop-zone").hidden = !workspace?.canWrite;
     $("#workspace-cards").replaceChildren(
-      ...workspaces.map((w) =>
-        el(
+      ...workspaces.map((w) => {
+        const url = new URL(location.href);
+        url.searchParams.set("workspaceId", w.id);
+        url.searchParams.set("path", "");
+        const open = (event) => {
+          if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey ||
+              window.getSelection()?.toString()) return;
+          event.preventDefault();
+          return selectWorkspace(w.id);
+        };
+        return el(
           "article",
-          { class: "card" },
+          { class: "card workspace-card", onclick: (event) => {
+            if (event.target.closest("a, button, input, select, textarea, summary, footer")) return;
+            return open(event);
+          } },
           el(
             "header",
             {},
-            el("h2", { text: w.workspaceName }),
+            el("h2", {}, el("a", { class: "workspace-card-link", href: url.href,
+              "aria-label": `${I18n.t("openWorkspace")}: ${w.workspaceName}`,
+              text: w.workspaceName, onclick: open })),
             el("span", {
               class: "badge",
               text: I18n.t(w.canWrite ? "editor" : "viewer"),
@@ -192,13 +254,14 @@
             text: w.description || I18n.t("workspaceHint"),
           }),
           el("p", { class: "small muted num", text: UI.date(w.createTime) }),
-          el(
+          w.canManage && w.canWrite ? el(
             "footer",
-            {},
-            button("openWorkspace", () => selectWorkspace(w.id)),
-          ),
-        ),
-      ),
+            { onclick: (event) => event.stopPropagation() },
+            button("editWorkspace", () => editWorkspace(w), "", "edit"),
+            button("deleteWorkspace", () => deleteWorkspace(w), "danger"),
+          ) : null,
+        );
+      }),
     );
     if (picking && !workspaces.length)
       $("#workspace-cards").append(
@@ -246,7 +309,95 @@
     );
     return details;
   }
+  function closeRowMenu(restoreFocus = false) {
+    if (!activeMenu) return;
+    const { trigger, menu } = activeMenu;
+    activeMenu = null;
+    trigger.setAttribute("aria-expanded", "false");
+    menu.remove();
+    if (restoreFocus && trigger.isConnected) trigger.focus();
+  }
+  function rowActions(entry) {
+    const trigger = el("button", { type: "button", class: "ghost", text: "…",
+      "aria-label": I18n.t("actions"), title: I18n.t("actions"),
+      onclick: () => openRowMenu(trigger, entry) });
+    trigger.setAttribute("aria-haspopup", "menu");
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.setAttribute("aria-controls", "file-action-menu");
+    trigger.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        openRowMenu(trigger, entry, event.key === "ArrowUp");
+      }
+    });
+    return trigger;
+  }
+  function openRowMenu(trigger, entry, last = false) {
+    if (activeMenu?.trigger === trigger) {
+      closeRowMenu(true);
+      return;
+    }
+    closeRowMenu();
+    const menu = el("div", { id: "file-action-menu", class: "workspace-row-popover", role: "menu",
+      "aria-label": I18n.t("actions"), dir: I18n.ctx.dir });
+    for (const [key, action, cls] of [
+      ["rename", () => renameEntry(entry), ""],
+      ["delete", () => deleteEntry(entry), "danger"],
+    ]) {
+      const item = button(key, () => {
+        closeRowMenu(true);
+        Promise.resolve(action()).catch((e) => toast(errorText(e)));
+      }, cls);
+      item.setAttribute("role", "menuitem");
+      item.tabIndex = -1;
+      menu.append(item);
+    }
+    document.body.append(menu);
+    activeMenu = { trigger, menu };
+    trigger.setAttribute("aria-expanded", "true");
+    const rect = trigger.getBoundingClientRect(),
+      bounds = menu.getBoundingClientRect(), gap = 4, margin = 8,
+      width = document.documentElement.clientWidth, height = window.innerHeight;
+    const start = { rtl: rect.left, ltr: rect.right - bounds.width }[I18n.ctx.dir];
+    // getBoundingClientRect返回物理坐标；根据dir对齐后再限制在视口范围。
+    menu.style.left = `${Math.max(margin, Math.min(start, width - bounds.width - margin))}px`;
+    menu.style.top = `${Math.max(margin, Math.min(
+      rect.bottom + gap + bounds.height <= height - margin ? rect.bottom + gap : rect.top - gap - bounds.height,
+      height - bounds.height - margin))}px`;
+    const items = [...menu.querySelectorAll("button")];
+    items[last ? items.length - 1 : 0].focus();
+    menu.addEventListener("keydown", (event) => {
+      const index = items.indexOf(document.activeElement);
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+          : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+        items[next].focus();
+      }
+    });
+  }
+  document.addEventListener("pointerdown", (event) => {
+    if (activeMenu && !activeMenu.menu.contains(event.target) && !activeMenu.trigger.contains(event.target))
+      closeRowMenu();
+  });
+  document.addEventListener("focusin", (event) => {
+    if (activeMenu && !activeMenu.menu.contains(event.target) && event.target !== activeMenu.trigger)
+      closeRowMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (!activeMenu) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeRowMenu(true);
+    } else if (event.key === "Tab") closeRowMenu(true);
+  });
+  document.addEventListener("scroll", (event) => {
+    if (activeMenu && !activeMenu.menu.contains(event.target)) closeRowMenu(true);
+  }, true);
+  window.addEventListener("resize", () => closeRowMenu(true));
+  window.addEventListener("pagehide", () => closeRowMenu());
   function renderFiles() {
+    closeRowMenu();
     if (!workspace) return;
     const rows = entries;
     $("#file-list").replaceChildren(
@@ -276,27 +427,12 @@
         if (entry.canWrite) {
           if (html)
             actions.append(iconButton("edit", () => editFile(entry), "edit"));
-          const menu = el("details", { class: "row-menu" });
-          menu.append(
-            el("summary", { "aria-label": I18n.t("actions"), text: "…" }),
-            el(
-              "div",
-              { class: "menu-popover" },
-              button("rename", () => {
-                menu.open = false;
-                renameEntry(entry);
-              }),
-              button(
-                "delete",
-                () => {
-                  menu.open = false;
-                  deleteEntry(entry);
-                },
-                "danger",
-              ),
-            ),
-          );
-          actions.append(menu);
+          if (folder)
+            actions.append(
+              button("rename", () => renameEntry(entry), "", "edit"),
+              button("delete", () => deleteEntry(entry), "danger"),
+            );
+          else actions.append(rowActions(entry));
         }
         return el(
           "tr",
@@ -397,12 +533,15 @@
     }
   }
   async function loadMembers() {
-    if (!workspace) return;
+    const sequence = ++memberRequestId, target = workspace;
+    if (!target) return;
     try {
-      members = await API("members", { query: { workspaceId: workspace.id } });
+      const result = await API("members", { query: { workspaceId: target.id } });
+      if (sequence !== memberRequestId || workspace !== target) return;
+      members = result;
       renderMembers();
     } catch (e) {
-      toast(errorText(e));
+      if (sequence === memberRequestId && workspace === target) toast(errorText(e));
     }
   }
   function renderMembers() {
@@ -413,7 +552,8 @@
       $("#member-list").append(memberRow(member, member.isOwner));
     $("#member-actions").replaceChildren();
     if (workspace.canManage && workspace.canWrite)
-      $("#member-actions").append(button("invite", inviteMember, "", "plus"));
+      $("#member-actions").append(button("invite", inviteMember, "", "plus"),
+        button("inviteManage", manageInvitations));
   }
   function memberRow(member, isOwner) {
     const row = el(
@@ -466,32 +606,75 @@
     return row;
   }
   async function inviteMember() {
+    const destination = workspace.id, requestId = crypto.randomUUID();
     const result = await formDialog(
       I18n.t("invite"),
       [
-        { key: "accountName", name: "userName", required: true },
-        {
-          key: "role",
-          name: "collaborate",
-          value: "false",
-          options: [
-            { value: "false", label: I18n.t("noCollaborate") },
-            { value: "true", label: I18n.t("collaborate") },
-          ],
-        },
+        { key: "role", name: "collaborate", value: "false", options: [
+          { value: "false", label: I18n.t("noCollaborate") },
+          { value: "true", label: I18n.t("collaborate") },
+        ] },
+        { key: "expiry", name: "expireHours", value: "168", options: [
+          { value: "24", label: I18n.t("day1") },
+          { value: "168", label: I18n.t("day7") },
+          { value: "720", label: I18n.t("day30") },
+        ] },
       ],
-      (v) =>
-        API("member", {
-          method: "POST",
-          body: {
-            workspaceId: workspace.id,
-            userName: v.userName,
-            collaborate: v.collaborate === "true",
-          },
-        }),
-      { saveKey: "invite", intro: I18n.t("inviteHint") },
+      (v) => API("invitation", { method: "POST", body: { workspaceId: destination,
+        collaborate: v.collaborate === "true", expireHours: Number(v.expireHours), requestId } }),
+      { saveKey: "inviteGenerate", intro: I18n.t("inviteHint") },
     );
-    if (result) await loadMembers();
+    if (!result) return;
+    const fragment = new URL(result.inviteUrl).hash;
+    const match = /^#invite=([A-Za-z0-9_-]{43})$/.exec(fragment);
+    if (!match) throw new Error("ROUTE_NOT_ALLOWED");
+    const inviteUrl = UI.invitationUrl("invite", match[1]);
+    await UI.dialog(I18n.t("inviteCreated"), (node, close) => {
+      node.append(
+        el("p", { class: "form-note", text: I18n.t("inviteOnce") }),
+        el("label", { for: "invitation-link", text: I18n.t("inviteLink") }),
+        el("input", { id: "invitation-link", value: inviteUrl, readonly: "", dir: "ltr" }),
+        el("p", { class: "small muted num", text: I18n.t("expires") + ": " + UI.date(result.expireTime) }),
+        el("div", { class: "actions" }, button("close", () => close(null)),
+          UI.copyButton("copyLink", () => UI.copy(inviteUrl), "primary")),
+      );
+    }).result;
+  }
+  async function manageInvitations() {
+    const destination = workspace.id;
+    try {
+      let invitations = await API("invitations", { query: { workspaceId: destination } });
+      await UI.dialog(I18n.t("inviteManage"), (node, close) => {
+        const list = el("div", { class: "cards invitation-cards" }), status = el("div", { class: "status-line", role: "status", "aria-live": "polite" });
+        function render() {
+          list.replaceChildren(...invitations.map((invitation) => {
+            const remove = button("delete", async () => {
+              if (!(await UI.confirm(I18n.t("inviteDeleteConfirm")))) return;
+              remove.disabled = true;
+              status.textContent = I18n.t("saving");
+              list.setAttribute("aria-busy", "true");
+              try {
+                await API("invitation", { method: "DELETE", query: { id: invitation.id } });
+                invitations = invitations.filter((item) => item.id !== invitation.id);
+                render();
+                status.textContent = I18n.t("success");
+              } catch (error) { status.textContent = errorText(error); }
+              finally { remove.disabled = false; list.setAttribute("aria-busy", "false"); }
+            }, "danger");
+            return el("article", { class: "card invitation-card" },
+              el("header", {}, el("h3", { text: I18n.t(invitation.collaborate ? "collaborate" : "noCollaborate") }),
+                el("span", { class: "badge", text: I18n.t(invitation.isActive ? "active" : "expired") })),
+              el("p", { class: "small muted num", text: I18n.t("created") + ": " + UI.date(invitation.createTime) }),
+              el("p", { class: "small muted num", text: I18n.t("expires") + ": " + UI.date(invitation.expireTime) }),
+              el("footer", {}, remove));
+          }));
+          if (!invitations.length) list.append(el("p", { class: "form-note", text: I18n.t("inviteEmpty") }));
+        }
+        render();
+        node.append(el("p", { class: "form-note", text: I18n.t("inviteOnce") }), list, status,
+          el("div", { class: "actions" }, button("close", () => close(null))));
+      }).result;
+    } catch (error) { toast(errorText(error)); }
   }
   async function editMember(member) {
     const result = await formDialog(
@@ -676,7 +859,47 @@
       toast(errorText(e));
     }
   }
+  const shareIsActive = (share) => share.revokedTime == null &&
+    (share.expireTime == null || share.expireTime > Date.now());
   async function shareFolder() {
+    if (sharing || !workspace?.canWrite) return;
+    sharing = true;
+    const destination = { workspaceId: workspace.id, path };
+    try {
+      const shares = (await API("shares")).filter((share) =>
+        share.workspaceId === destination.workspaceId && share.path === destination.path && shareIsActive(share));
+      if (shares.length) {
+        const choice = await UI.dialog(I18n.t("existingShares"), (node, close) => {
+          const select = el("select", { id: "existing-share-choice" });
+          shares.forEach((share, index) => select.append(el("option", { value: share.id,
+            text: I18n.t("shareOption", { number: index + 1, created: UI.date(share.createTime),
+              expires: share.expireTime == null ? I18n.t("forever") : UI.date(share.expireTime) }) })));
+          node.append(
+            el("p", { class: "form-note", text: I18n.t("existingSharesHint") }),
+            el("label", { for: select.id, text: I18n.t("existingShareChoice") }), select,
+            el("div", { class: "actions" },
+              button("cancel", () => close(null)),
+              button("newShare", () => close({ create: true })),
+              button("useExistingShare", () => close({ id: select.value }), "primary")),
+          );
+        }).result;
+        if (!choice) return;
+        if (!choice.create) {
+          const current = (await API("shares")).find((share) => share.id === choice.id &&
+            share.workspaceId === destination.workspaceId && share.path === destination.path && shareIsActive(share));
+          if (!current) { toast(I18n.t("shareNotFound")); return; }
+          await showShare(current, "existingShareLink");
+          return;
+        }
+      }
+      await createShare(destination);
+    } catch (e) {
+      toast(errorText(e));
+    } finally {
+      sharing = false;
+    }
+  }
+  async function createShare(destination) {
     const result = await formDialog(
       I18n.t("shareTitle"),
       [
@@ -696,15 +919,17 @@
         API("share", {
           method: "POST",
           body: {
-            workspaceId: workspace.id,
-            path,
+            ...destination,
+            createNew: true,
             expireHours: Number(v.expireHours),
           },
         }),
       { saveKey: "share", intro: I18n.t("shareHint") },
     );
-    if (result)
-      UI.dialog(I18n.t("shareCreated"), (node, close) => {
+    if (result) await showShare(result, "shareCreated");
+  }
+  function showShare(result, titleKey) {
+    return UI.dialog(I18n.t(titleKey), (node, close) => {
         node.append(
           el("p", { class: "form-note", text: I18n.t("shareHint") }),
           el("label", { for: "share-created-link", text: I18n.t("link") }),
@@ -714,15 +939,15 @@
             readonly: "",
             class: "share-link",
           }),
-          el("p", {
-            class: "small muted num",
-            text: I18n.t("expires") + ": " + UI.date(result.expireTime),
-          }),
+          el("p", { class: "small muted" },
+            I18n.t("expires") + ": ",
+            el("bdi", { dir: "ltr", class: "num", text: result.expireTime == null
+              ? I18n.t("forever") : UI.date(result.expireTime) })),
           el(
             "div",
             { class: "actions" },
             button("close", () => close(null)),
-            button(
+            UI.copyButton(
               "copyLink",
               () => UI.copy(result.shareUrl),
               "primary",
@@ -730,7 +955,7 @@
             ),
           ),
         );
-      });
+      }).result;
   }
   function fileBase64(file) {
     return new Promise((resolve, reject) => {
@@ -899,11 +1124,5 @@
   } catch (e) {
     $("#workspace-status").textContent = errorText(e);
     $("#workspace-status").classList.add("error");
-    if (e.httpStatus === 401)
-      $("#workspace-status").append(
-        button("login", () =>
-          page.request("shell.navigate", { routeId: "auth" }),
-        ),
-      );
   }
 })();

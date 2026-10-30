@@ -155,8 +155,8 @@ process.stdout.write('ok');
         self.assert_biz_error(401, self.service.mcp_authenticated, expired["key"])
         self.assertFalse(self.service.mcp_keys(self.admin)[0]["isActive"])
         revoked = self.create()
-        self.service.mcp_key_revoke(self.admin, revoked["id"])
-        self.service.mcp_key_revoke(self.admin, revoked["id"])
+        self.service.mcp_key_delete(self.admin, revoked["id"])
+        self.service.mcp_key_delete(self.admin, revoked["id"])
         self.assert_biz_error(401, self.service.mcp_authenticated, revoked["key"])
         live = self.create()
         self.service.repo.execute("UPDATE sys_user SET is_disabled=1 WHERE id=?", (db_id(self.admin["id"]),))
@@ -171,7 +171,7 @@ process.stdout.write('ok');
         peer = self.service.repo.user(account["id"])
         created = self.create()
         self.assertEqual(self.service.mcp_keys(peer), [])
-        self.assert_biz_error(404, self.service.mcp_key_revoke, peer, created["id"])
+        self.assert_biz_error(404, self.service.mcp_key_delete, peer, created["id"])
         self.assertEqual(self.service.mcp_authenticated(created["key"])["id"], self.admin["id"])
         self.assertRegex(self.create(user=peer)["key"], r"^bsk-")
 
@@ -199,7 +199,7 @@ process.stdout.write('ok');
         self.assertEqual(len({result["key"] for result in successful}), 10)
         self.assertEqual([(result.code, result.status) for result in rejected], [(409, "MCP_KEY_LIMIT")] * 4)
         self.assertEqual(len(self.service.mcp_keys(self.admin)), 10)
-        self.service.mcp_key_revoke(self.admin, successful[0]["id"])
+        self.service.mcp_key_delete(self.admin, successful[0]["id"])
         self.service.repo.execute("UPDATE auth_mcp_key SET expire_time=? WHERE id=?", (now_ms() - 1, db_id(successful[1]["id"])))
         self.create()
         self.create()
@@ -283,15 +283,29 @@ class McpHttpSecurityTests(unittest.TestCase):
         status, response, _ = self.request(actor=None, method="GET", route="/mcp-key/list", cookie_actor="peer", headers={"Origin": self.config.public_origin})
         self.assertEqual(status, 200, response)
         self.assertNotIn(self.keys["peer"]["key"], json.dumps(response))
-        self.assertEqual(self.request({"keyName": "no-origin", "requestId": secrets.token_hex(16)}, actor=None, route="/mcp-key", cookie_actor="peer")[0], 403)
+        self.assertEqual(self.request({"keyName": "opaque-origin", "requestId": secrets.token_hex(16)}, actor=None, route="/mcp-key", cookie_actor="peer", headers={"Origin": "null"})[0], 403)
+        self.assertEqual(self.request({"keyName": "cross-site", "requestId": secrets.token_hex(16)}, actor=None, route="/mcp-key", cookie_actor="peer", headers={"Sec-Fetch-Site": "same-site"})[0], 403)
 
-    def test_untrusted_origin_host_and_cross_site_are_rejected(self):
-        for headers in ({"Origin": "null"}, {"Origin": "http://untrusted.invalid"}, {"Host": "untrusted.invalid"}, {"Sec-Fetch-Site": "cross-site"}):
+    def test_opaque_origin_and_cross_origin_fetch_metadata_are_rejected(self):
+        for headers in ({"Origin": "null"}, {"Origin": "null", "Sec-Fetch-Site": "same-origin"},
+                        {"Origin": ""}, {"Origin": "https://untrusted.invalid", "Sec-Fetch-Site": "cross-site"},
+                        {"Sec-Fetch-Site": "same-site"}, {"Sec-Fetch-Site": "cross-site"}):
             with self.subTest(headers=headers):
                 status, response, _ = self.request(headers=headers)
                 self.assertEqual(status, 403, response)
                 self.assertEqual(response["error"]["data"]["status"], "ORIGIN_DENIED")
         self.assertEqual(self.request(headers={"Origin": self.config.public_origin})[0], 200)
+
+    def test_gateway_https_origin_internal_host_and_native_clients_keep_bearer_auth(self):
+        with mock.patch.object(self.config, "public_origin", "http://configured.example:8080"):
+            for headers in ({"Host": "internal-gateway:8080"},
+                            {"Origin": "https://product.rd.chn-das.com", "Host": "127.0.0.1:8080", "Sec-Fetch-Site": "same-origin"},
+                            {"Origin": "https://tenant.example", "Host": "internal-gateway:8080", "X-Forwarded-Host": "untrusted.invalid", "X-Forwarded-Proto": "http"}):
+                with self.subTest(headers=headers):
+                    status, response, _ = self.request(headers=headers)
+                    self.assertEqual((status, response["result"]), (200, {}))
+                    status, response, _ = self.request(actor=None, cookie_actor="peer", headers=headers)
+                    self.assertEqual((status, response["error"]["data"]["status"]), (401, "AUTH_REQUIRED"))
 
     def test_jsonrpc_envelope_and_schema_validation(self):
         cases = [([], -32600), ({"jsonrpc": "1.0", "id": 1, "method": "ping"}, -32600),

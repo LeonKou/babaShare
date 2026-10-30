@@ -38,7 +38,7 @@
           const ctx = await link.request("bridge.hello", {}, 1200);
           if (mode !== "pending") return standalone.context();
           mode = "embedded";
-          return ctx;
+          return I18n.normalizeContext(ctx);
         } catch (e) {
           if (e.name !== "SecurityError" && e.message !== "BRIDGE_TIMEOUT")
             console.warn("Bridge handshake failed", e);

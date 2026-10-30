@@ -6,7 +6,7 @@ set "SERVICE_DISPLAY=babaShare Prototype Sharing"
 for %%I in ("%~dp0..") do set "PROJECT_DIR=%%~fI"
 set "NSSM_EXE=%~dp0tools\nssm.exe"
 if not defined BABA_SHARE_DATA_DIR set "BABA_SHARE_DATA_DIR=%ProgramData%\babaShare\data"
-if not defined BABA_SHARE_HOST set "BABA_SHARE_HOST=127.0.0.1"
+if not defined BABA_SHARE_HOST set "BABA_SHARE_HOST=0.0.0.0"
 if not defined BABA_SHARE_PORT set "BABA_SHARE_PORT=8080"
 if not defined BABA_SHARE_PUBLIC_ORIGIN set "BABA_SHARE_PUBLIC_ORIGIN="
 if not defined BABA_SHARE_SECURE_COOKIE set "BABA_SHARE_SECURE_COOKIE=0"
@@ -111,16 +111,24 @@ if errorlevel 1 goto :configure_failed
 if errorlevel 1 goto :configure_failed
 "%NSSM_EXE%" start "%SERVICE_NAME%"
 if errorlevel 1 goto :configure_failed
-powershell.exe -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop'; try { $hostName=$env:BABA_SHARE_HOST; if ($hostName -eq '0.0.0.0') { $hostName='127.0.0.1' }; $deadline=[DateTime]::UtcNow.AddSeconds(15); $ready=$false; do { $client=New-Object Net.Sockets.TcpClient; try { $task=$client.ConnectAsync($hostName,[int]$env:BABA_SHARE_PORT); if ($task.Wait(1000)) { $task.GetAwaiter().GetResult(); $ready=$true } } catch { } finally { $client.Dispose() }; if (-not $ready) { [Threading.Thread]::Sleep(250) } } while (-not $ready -and [DateTime]::UtcNow -lt $deadline); if (-not $ready) { throw 'Service listener did not become ready.' }; $service=Get-Service -Name 'babaShare'; if ($service.Status -ne 'Running') { throw 'Service is not running.' } } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }"
+powershell.exe -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop'; try { Add-Type -AssemblyName System.ServiceProcess; $service=Get-Service -Name 'babaShare'; $service.WaitForStatus([ServiceProcess.ServiceControllerStatus]::Running,[TimeSpan]::FromSeconds(15)) } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }"
 if errorlevel 1 goto :configure_failed
 "%PYTHON_EXE%" -B -c "import http.client,os; from urllib.parse import urlsplit; host=os.environ['BABA_SHARE_HOST']; host='127.0.0.1' if host=='0.0.0.0' else host; port=int(os.environ['BABA_SHARE_PORT']); origin=os.environ.get('BABA_SHARE_PUBLIC_ORIGIN') or 'http://'+host+':'+str(port); c=http.client.HTTPConnection(host,port,timeout=5); c.request('GET','/baba-share/',headers={'Host':urlsplit(origin).netloc}); r=c.getresponse(); assert r.status==200 and r.getheader('Server','').startswith('babaShare'), 'Service HTTP check failed'; r.read(); c.close()"
-if errorlevel 1 goto :configure_failed
+if errorlevel 1 (
+  echo ERROR: Service is registered, but HTTP readiness was not confirmed.
+  echo The service registration was preserved because NSSM Running does not mean Python is ready.
+  echo Inspect "%LOG_DIR%" and Event Viewer; verify the page after initialization completes.
+  echo Do not rerun installation over this service. Diagnose it or explicitly uninstall it first.
+  exit /b 1
+)
 
 echo.
 echo babaShare service was installed and started as LocalService.
 echo Project directory: "%PROJECT_DIR%"
 echo Data and logs: "%BABA_SHARE_DATA_DIR%"
 echo Listening address: %BABA_SHARE_HOST%:%BABA_SHARE_PORT%
+echo 0.0.0.0 is a bind address, not a browser or public link address.
+echo Use localhost or the actual server IP/domain. Firewall rules are not changed.
 echo Open the configured public origin with /baba-share/ appended.
 echo Verify login, preview sandbox, and persistence in your browser before production use.
 echo Uninstall with scripts\uninstall-windows-service.bat to preserve all data.

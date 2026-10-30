@@ -80,10 +80,15 @@ class Application:
                 path = unquote(path, errors="replace")
                 return path == WEB_BASE + "/preview" or path.startswith(WEB_BASE + "/preview/")
 
+            def send_header(self, keyword, value):
+                if keyword.lower() == "set-cookie" and self.is_preview_request():
+                    return
+                super().send_header(keyword, value)
+
             def end_headers(self):
                 # 统一出口按请求分类，默认HTTP错误和重定向也不能丢失沙箱。
                 if self.is_preview_request():
-                    self.send_header("Content-Security-Policy", "sandbox allow-scripts; default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors " + app.config.public_origin)
+                    self.send_header("Content-Security-Policy", "sandbox allow-scripts; default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'")
                     self.send_header("Cross-Origin-Resource-Policy", "cross-origin")
                     self.send_header("Access-Control-Allow-Origin", "*")
                 else:
@@ -165,14 +170,13 @@ class Application:
                         self.connection.settimeout(30)
 
             def check_origin(self):
+                # 域名、TLS和来源准入由网关负责；不可拿内部Host或转发头推断浏览器来源。
                 origin = self.headers.get("Origin")
-                if origin is not None:
-                    require(origin == app.config.public_origin, 403, "ORIGIN_DENIED", "拒绝跨来源接口请求")
-                if self.command != "GET":
-                    require(origin == app.config.public_origin, 403, "ORIGIN_DENIED", "变更请求必须携带可信Origin")
-                require(self.headers.get("Sec-Fetch-Site") not in ("cross-site",), 403, "ORIGIN_DENIED", "拒绝跨站接口请求")
-                require(self.headers.get("Host") == urlsplit(app.config.public_origin).netloc,
-                        403, "ORIGIN_DENIED", "请求Host不可信")
+                require(origin not in ("null", ""), 403, "ORIGIN_DENIED", "拒绝不透明来源接口请求")
+                # sandbox请求的Origin为null；GET即使省略Origin也会携带跨站Fetch Metadata。
+                # same-site仍可能来自不可信兄弟子域。无元数据的非浏览器客户端交网关准入。
+                require(self.headers.get("Sec-Fetch-Site") in (None, "same-origin", "none"),
+                        403, "ORIGIN_DENIED", "拒绝跨来源接口请求")
 
             def handle_request(self):
                 api = False
@@ -256,12 +260,7 @@ class Application:
             def mcp_request(self):
                 request_id = None
                 try:
-                    origin = self.headers.get("Origin")
-                    require(origin is None or origin == app.config.public_origin,
-                            403, "ORIGIN_DENIED", "拒绝跨来源MCP请求")
-                    require(self.headers.get("Host") == urlsplit(app.config.public_origin).netloc and
-                            self.headers.get("Sec-Fetch-Site") != "cross-site",
-                            403, "ORIGIN_DENIED", "MCP请求来源或Host不可信")
+                    self.check_origin()
                     authorization = self.headers.get("Authorization", "").split()
                     require(len(authorization) == 2 and authorization[0].lower() == "bearer",
                             401, "AUTH_REQUIRED", "MCP需要Bearer密钥")
@@ -326,7 +325,7 @@ class Application:
                 elif route == "/mcp-key" and method == "POST":
                     result = service.mcp_key_create(user, body)
                 elif route == "/mcp-key" and method == "DELETE":
-                    result = service.mcp_key_revoke(user, query.get("id"))
+                    result = service.mcp_key_delete(user, query.get("id"))
                 elif route == "/mcp-key/content" and method == "POST":
                     result = service.mcp_key_content(user, body.get("id"))
                 elif route == "/user/list" and method == "GET":
@@ -347,6 +346,14 @@ class Application:
                     result = service.workspace_change(user, body)
                 elif route == "/workspace" and method == "DELETE":
                     result = service.workspace_delete(user, query.get("id"))
+                elif route == "/invitation/list" and method == "GET":
+                    result = service.invitations(user, query.get("workspaceId"))
+                elif route == "/invitation" and method == "POST":
+                    result = service.invitation_create(user, body)
+                elif route == "/invitation" and method == "DELETE":
+                    result = service.invitation_delete(user, query.get("id"))
+                elif route == "/invitation/membership" and method == "POST":
+                    result = service.invitation_membership(user, body)
                 elif route == "/member/list" and method == "GET":
                     result = service.members(user, query.get("workspaceId"))
                 elif route == "/member" and method in ("POST", "PATCH"):

@@ -15,10 +15,43 @@ from backend.runtime import Preflight, RuntimeLock
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_config_defaults_to_wildcard_with_loopback_public_origin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Config(Path(directory))
+            self.assertEqual(config.host, "0.0.0.0")
+            self.assertEqual(config.public_origin, "http://127.0.0.1:8080")
+            self.assertFalse(config.database_path.exists())
+
+    def test_config_from_env_without_host_defaults_to_wildcard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.dict(os.environ, {"BABA_SHARE_DATA_DIR": directory}, clear=True):
+                with mock.patch.object(Path, "is_file", return_value=False):
+                    config = Config.from_env()
+            self.assertEqual(config.root, Path(directory).resolve())
+            self.assertEqual(config.host, "0.0.0.0")
+            self.assertEqual(config.public_origin, "http://127.0.0.1:8080")
+            self.assertFalse(config.database_path.exists())
+
+    def test_config_from_env_preserves_explicit_loopback_host(self):
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {"BABA_SHARE_DATA_DIR": directory, "BABA_SHARE_HOST": "127.0.0.1"}
+            with mock.patch.dict(os.environ, environment, clear=True):
+                with mock.patch.object(Path, "is_file", return_value=False):
+                    config = Config.from_env()
+            self.assertEqual(config.host, "127.0.0.1")
+            self.assertEqual(config.public_origin, "http://127.0.0.1:8080")
+            self.assertFalse(config.database_path.exists())
+
+    def test_wildcard_host_preserves_explicit_public_origin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Config(Path(directory), public_origin="https://share.example.com")
+            self.assertEqual(config.host, "0.0.0.0")
+            self.assertEqual(config.public_origin, "https://share.example.com")
+
     def config(self, root, web=None):
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
-            return Config(Path(root), port=sock.getsockname()[1], web_dir=web)
+            return Config(Path(root), host="127.0.0.1", port=sock.getsockname()[1], web_dir=web)
 
     def test_preflight_initializes_database_in_temp_directory(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -111,7 +144,7 @@ class RuntimeTests(unittest.TestCase):
             with socket.socket() as occupied:
                 occupied.bind(("127.0.0.1", 0))
                 port = occupied.getsockname()[1]
-                config = Config(Path(directory), port=port)
+                config = Config(Path(directory), host="127.0.0.1", port=port)
                 with self.assertRaisesRegex(RuntimeError, "不可用"):
                     Preflight(config).run()
                 self.assertFalse(config.database_path.exists())
@@ -120,7 +153,7 @@ class RuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             config = self.config(directory)
             environment = os.environ.copy()
-            environment.update(BABA_SHARE_DATA_DIR=directory, BABA_SHARE_PORT=str(config.port))
+            environment.update(BABA_SHARE_DATA_DIR=directory, BABA_SHARE_HOST="127.0.0.1", BABA_SHARE_PORT=str(config.port))
             result = subprocess.run([sys.executable, "server.py", "--check"], cwd=Path(__file__).resolve().parent.parent,
                                     env=environment, capture_output=True, text=True, timeout=15)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -274,6 +307,22 @@ class RuntimeTests(unittest.TestCase):
             finally:
                 lock.release()
 
+    def test_compose_bind_defaults_and_overrides_do_not_change_public_origin(self):
+        import re
+        compose = (Path(__file__).resolve().parent.parent / "compose.yaml").read_text(encoding="utf-8")
+        mapping = next(line.strip()[3:-1] for line in compose.splitlines()
+                       if line.strip().startswith('- "${BABA_SHARE_PUBLISH_IP'))
+        environment = {}
+
+        def expand(value):
+            return re.sub(r"\$\{([A-Z_]+):-([^{}]*)\}",
+                          lambda match: environment.get(match[1]) or match[2], value)
+
+        self.assertEqual(expand(mapping), "0.0.0.0:8080:8080")
+        environment.update(BABA_SHARE_PUBLISH_IP="127.0.0.1", BABA_SHARE_PUBLISH_PORT="18080")
+        self.assertEqual(expand(mapping), "127.0.0.1:18080:8080")
+        self.assertNotIn("http://0.0.0.0", compose)
+
     def test_compose_default_origins_track_published_ports(self):
         import re
         compose = (Path(__file__).resolve().parent.parent / "compose.yaml").read_text(encoding="utf-8")
@@ -308,7 +357,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertNotIn("8081", docker)
         compose = (project / "compose.yaml").read_text(encoding="utf-8")
         self.assertIn("baba-share-data:/var/lib/baba-share", compose)
-        self.assertIn("BABA_SHARE_PUBLISH_IP:-127.0.0.1", compose)
+        self.assertIn("BABA_SHARE_PUBLISH_IP:-0.0.0.0", compose)
         self.assertIn("read_only: true", compose)
         ignore = (project / ".dockerignore").read_text(encoding="utf-8")
         self.assertEqual(ignore.splitlines()[0], "**")

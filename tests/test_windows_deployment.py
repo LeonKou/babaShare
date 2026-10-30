@@ -23,6 +23,24 @@ class WindowsDeploymentTests(unittest.TestCase):
             self.assertLess(max(map(len, text.splitlines())), 8191)
             self.assertNotRegex(text.lower(), r"\b(?:curl|wget|invoke-webrequest)\b")
 
+    def test_default_bind_is_wildcard_and_explicit_host_override_is_preserved(self):
+        self.assertIn('if not defined BABA_SHARE_HOST set "BABA_SHARE_HOST=0.0.0.0"', self.install)
+        self.assertIn('"BABA_SHARE_HOST=%BABA_SHARE_HOST%"', self.install)
+        self.assertIn("host='127.0.0.1' if host=='0.0.0.0' else host", self.install)
+        env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+        self.assertRegex(env_example, r"(?m)^BABA_SHARE_HOST=0\.0\.0\.0$")
+        compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+        self.assertIn("BABA_SHARE_HOST: 0.0.0.0", compose)
+        self.assertIn("${BABA_SHARE_PUBLISH_IP:-0.0.0.0}", compose)
+        self.assertIn("http://127.0.0.1:${BABA_SHARE_PUBLISH_PORT:-8080}", compose)
+        for relative in ("README.md", "DEPLOYMENT.md"):
+            with self.subTest(document=relative):
+                doc = (ROOT / relative).read_text(encoding="utf-8")
+                self.assertIn("| `BABA_SHARE_HOST` | `0.0.0.0` |", doc)
+                self.assertIn("不是浏览器访问地址或外部链接地址", doc)
+                self.assertIn("不会自动放行防火墙", doc)
+                self.assertIn("BABA_SHARE_PUBLISH_IP=127.0.0.1", doc)
+
     def test_python_discovery_accepts_newer_versions_and_paths_with_spaces(self):
         self.assertIn('set "PYTHON_EXE=%BABA_SHARE_PYTHON%"', self.install)
         self.assertIn("py -3 -c", self.install)
@@ -55,6 +73,13 @@ class WindowsDeploymentTests(unittest.TestCase):
         for text in (self.install, self.uninstall):
             self.assertNotRegex(text.lower(), r"\b(?:del|erase|rmdir|rd|remove-item)\b")
         self.assertIn("Rollback failed", self.install)
+        http_index = self.install.index("import http.client,os;")
+        readiness_end = self.install.index("echo babaShare service was installed", http_index)
+        readiness_branch = self.install[http_index:readiness_end]
+        self.assertIn("Service is registered, but HTTP readiness was not confirmed", readiness_branch)
+        self.assertIn("registration was preserved", readiness_branch)
+        self.assertNotIn("goto :configure_failed", readiness_branch)
+        self.assertNotIn('remove "%SERVICE_NAME%"', readiness_branch)
 
     def test_uninstall_handles_absent_and_already_stopped_service(self):
         self.assertLess(self.uninstall.index('sc.exe query'), self.uninstall.index('if not exist "%NSSM_EXE%"'))
@@ -72,6 +97,12 @@ class WindowsDeploymentTests(unittest.TestCase):
                 text = (ROOT / relative).read_text(encoding="utf-8")
                 self.assertNotIn("8081", text)
                 self.assertNotRegex(text, r"(?:BABA_SHARE|PRODUCT_SHARE)_PREVIEW_")
+                self.assertNotIn("PRODUCT_SHARE_*", text)
+        self.assertNotIn("::Sleep", self.install)
+        self.assertIn("WaitForStatus", self.install)
+        env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+        self.assertIn("安全阻断", env_example)
+        self.assertNotIn("继续使用旧库", env_example)
         docker = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
         self.assertEqual(re.findall(r"^EXPOSE (.+)$", docker, re.M), ["8080"])

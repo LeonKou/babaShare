@@ -58,6 +58,7 @@
     try {
       await navigator.clipboard.writeText(text);
       UI.toast(I18n.t("mcpCopied"));
+      return true;
     } catch (error) {
       const fallback = UI.dialog(I18n.t("mcpInstructions"), (node, close) => {
         const area = el("textarea", {
@@ -72,10 +73,12 @@
         node.addEventListener("close", () => { area.value = ""; }, { once: true });
         queueMicrotask(() => { area.focus(); area.select(); });
       }, { wide: true });
+      UI.toast(I18n.t("copyFailed"));
       const cleanup = () => fallback.close(null);
       window.addEventListener("pagehide", cleanup, { once: true });
       try { await fallback.result; }
       finally { window.removeEventListener("pagehide", cleanup); }
+      return false;
     } finally {
       text = "";
     }
@@ -88,7 +91,7 @@
       delete response.key;
       text = instructions(secret);
       secret = "";
-      await copy(text);
+      return await copy(text);
     } finally {
       if (response) delete response.key;
       response = null;
@@ -98,11 +101,9 @@
   }
   function showCreated(keyId, onError) {
     const shown = UI.dialog(I18n.t("mcpCreated"), (node, close) => {
-      const use = button("mcpCopyUse", async () => {
-        use.disabled = true;
-        try { await copyUse(keyId); }
-        catch (error) { onError(error); }
-        finally { use.disabled = false; }
+      const use = UI.copyButton("mcpCopyUse", async () => {
+        try { return await copyUse(keyId); }
+        catch (error) { onError(error); return false; }
       }, "primary");
       use.setAttribute("aria-describedby", "mcp-created-privacy");
       node.append(

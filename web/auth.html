@@ -11,11 +11,11 @@
   </head>
   <body class="auth-body">
     <aside class="auth-story">
-      <div class="brand">
+      <a class="brand brand-home" href="/baba-share/">
         <span class="brand-mark" aria-hidden="true"
           ><i></i><i></i><i></i><i></i></span
         >babaShare
-      </div>
+      </a>
       <div>
         <p class="eyebrow" data-i18n="authEyebrow">从灵感到体验</p>
         <h1 id="auth-story-title">让原型，触手可及。</h1>
@@ -44,10 +44,7 @@
           class="status-line"
           role="status"
           aria-live="polite"
-          data-i18n="loading"
-        >
-          正在加载…
-        </div>
+        ></div>
         <button
           type="submit"
           class="primary"
@@ -59,6 +56,14 @@
         <div class="auth-footer" id="auth-switch"></div>
       </form>
     </main>
+    <footer class="auth-branding">
+      <a
+        href="https://leonkou.github.io/babaShare/"
+        target="_blank"
+        rel="noopener noreferrer"
+        data-i18n="poweredBy"
+      >Powered by babaShare</a>
+    </footer>
     <div id="global-toast" class="toast" role="status" aria-live="polite"></div>
     <script src="assets/i18n.js"></script>
     <script src="assets/common.js"></script>

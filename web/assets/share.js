@@ -9,6 +9,14 @@
   let previewBase = null;
   let loadingSequence = 0;
   const directoryCache = new Map();
+  const shell = $("#share-shell");
+  const layout = $("#share-layout");
+  const sidebar = $("#share-sidebar");
+  let immersive = false;
+  let fullscreenPending = false;
+  let normalTreeCollapsed = false;
+  let treeCloseTimer;
+  let pointerInTree = false;
   UI.settingsControls($("#share-controls"));
   const toggle = el(
     "button",
@@ -18,25 +26,101 @@
       "aria-controls": "share-sidebar",
       "aria-expanded": "true",
       "data-i18n-label": "toggleTree",
-      onclick: () => {
-        const collapsed = $("#share-layout").classList.toggle("tree-collapsed");
-        toggle.setAttribute("aria-expanded", String(!collapsed));
-      },
+      onclick: () => setTreeOpen(layout.classList.contains("tree-collapsed")),
     },
     icon("tree"),
   );
   $("#share-controls").prepend(toggle);
-  $("#preview-actions").append(
-    button(
-      "fullscreen",
-      () =>
-        $("#share-stage")
-          .requestFullscreen?.()
-          .catch((error) => toast(errorText(error))),
-      "",
-      "fullscreen",
-    ),
+  const fullscreen = button("fullscreen", enterFullscreen, "", "fullscreen");
+  const edge = el(
+    "button",
+    {
+      type: "button",
+      class: "share-tree-edge",
+      "aria-controls": "share-sidebar",
+      "aria-expanded": "false",
+      "aria-label": I18n.t("toggleTree"),
+      "data-i18n-label": "toggleTree",
+      "data-i18n-title": "toggleTree",
+      title: I18n.t("toggleTree"),
+      onclick: (event) => setTreeOpen(
+        event.pointerType === "mouse" && pointerInTree
+          ? true
+          : layout.classList.contains("tree-collapsed"),
+      ),
+    },
   );
+  edge.hidden = true;
+  shell.append(edge);
+  $("#preview-actions").append(fullscreen);
+
+  function setTreeOpen(open) {
+    clearTimeout(treeCloseTimer);
+    if (!open && sidebar.contains(document.activeElement))
+      (immersive ? edge : toggle).focus();
+    layout.classList.toggle("tree-collapsed", !open);
+    sidebar.inert = !open;
+    sidebar.setAttribute("aria-hidden", String(!open));
+    toggle.setAttribute("aria-expanded", String(open));
+    edge.setAttribute("aria-expanded", String(open));
+  }
+  function closeTreeLater() {
+    clearTimeout(treeCloseTimer);
+    if (!immersive) return;
+    treeCloseTimer = setTimeout(() => {
+      if (!pointerInTree && !sidebar.contains(document.activeElement) && document.activeElement !== edge)
+        setTreeOpen(false);
+    }, 600);
+  }
+  for (const target of [edge, sidebar]) {
+    target.addEventListener("pointerenter", (event) => {
+      if (!immersive || event.pointerType === "touch") return;
+      pointerInTree = true;
+      setTreeOpen(true);
+    });
+    target.addEventListener("pointerleave", (event) => {
+      if (event.pointerType === "touch") return;
+      pointerInTree = sidebar.contains(event.relatedTarget) || edge.contains(event.relatedTarget);
+      closeTreeLater();
+    });
+    target.addEventListener("focusin", () => clearTimeout(treeCloseTimer));
+    target.addEventListener("focusout", closeTreeLater);
+  }
+  function setImmersive(active) {
+    if (immersive === active) return;
+    if (active) normalTreeCollapsed = layout.classList.contains("tree-collapsed");
+    immersive = active;
+    shell.classList.toggle("share-immersive", active);
+    edge.hidden = !active;
+    pointerInTree = false;
+    setTreeOpen(active ? false : !normalTreeCollapsed);
+    (active ? $("#shared-frame") : fullscreen).focus();
+  }
+  function syncFullscreen() {
+    const element = document.fullscreenElement;
+    setImmersive(element === shell || !!(element && shell.contains(element)));
+  }
+  async function enterFullscreen() {
+    if (immersive || fullscreenPending) return;
+    if (!shell.requestFullscreen) {
+      toast(I18n.t("fullscreenUnavailable"));
+      return;
+    }
+    fullscreenPending = true;
+    fullscreen.disabled = true;
+    try {
+      await shell.requestFullscreen();
+      syncFullscreen();
+    } catch (error) {
+      syncFullscreen();
+      toast(I18n.t("fullscreenUnavailable"));
+    } finally {
+      fullscreenPending = false;
+      fullscreen.disabled = false;
+    }
+  }
+  // Esc 由浏览器处理，沙箱原型持有焦点时父页也能正确恢复。
+  document.addEventListener("fullscreenchange", syncFullscreen);
   function state(title, hint) {
     $("#shared-frame").hidden = true;
     $("#share-state").hidden = false;

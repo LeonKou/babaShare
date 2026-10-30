@@ -21,8 +21,8 @@
 
 - MCP Key 是 Bearer 凭据：持有者可以以你的身份调用你已有权限内的 MCP 工具。不要存进源码、配置明文、URL、日志、提交记录或公开聊天。
 - 「复制使用」说明包含完整密钥，仅在你明确授权的前提下交给可信 AI 客户端；客户端应将密钥安全持久化到自己的私密环境文件或用户环境变量（Codex 支持 `bearer_token_env_var`），不得写入源码、项目 `.env`、URL、日志、shell 历史、提交或公开文件。页面不会修改本机 Codex 配置。
-- 环境变量仍可被拥有相同用户权限的进程读取；在可信机器及可信客户端上使用。完成复制后清理剪贴板，怀疑泄露时立即在个人中心撤销。
-- 撤销立即影响后续请求，无法恢复；永久密钥也应定期检查与轮换。
+- 环境变量仍可被拥有相同用户权限的进程读取；在可信机器及可信客户端上使用。完成复制后清理剪贴板，怀疑泄露时立即在个人中心删除。
+- 删除立即影响后续请求，物理移除记录及恢复信息且无法恢复；永久密钥也应定期检查与轮换。历史已撤销记录仅在用户主动删除时移除。
 
 ## 2. Windows PowerShell
 
@@ -127,16 +127,18 @@ OpenCode 官方远程 MCP 配置使用 `type: "remote"`、`url`、`enabled: true
 
 `localhost`、`127.0.0.1` 和 `::1` 只表示客户端所在机器；不能让另一台机器连接你的服务。远程或跨设备访问必须使用客户端可达且证书可信的 HTTPS 地址。当前服务配置支持 IPv4/域名，不支持 IPv6 监听。
 
-参考 `.env.example`，生产反向代理部署只需一个 HTTP 上游端口和一个精确公开来源：
+参考 `.env.example`，生产推荐由 Nginx 终止 HTTPS，再转发至一个 HTTP 上游；后端无需 TLS。公开来源只用于构造外部分享/预览 URL：
 
 ```dotenv
 BABA_SHARE_PUBLIC_ORIGIN=https://share.example.com
 BABA_SHARE_SECURE_COOKIE=1
 ```
 
-以上域名为示例，请替换；origin 不应包含路径、凭据、query 或片段。监听地址/唯一端口由 `BABA_SHARE_HOST`、`BABA_SHARE_PORT` 配置。主页面、API、MCP 与 `/baba-share/preview/{s|p}/token/...` 原始预览复用同一端口。预览响应通过 CSP `sandbox`（不含 `allow-same-origin`）使用不透明来源隔离，而不是第二监听端口。代理不得移除或放宽预览 CSP、缓存带票据页面，或把原始上传目录作为普通静态站点另行发布。反向代理应保持 `/baba-share/`（含预览）和 `/api/baba-share/core/v1/` 路径，保留实际公开 `Host` 并转发 `Authorization`，不要记录该请求头或带预览票据的完整路径。
+以上域名为示例，请替换；origin 不应包含路径、凭据、query 或片段。`BABA_SHARE_PUBLIC_ORIGIN` 不是 Host/Origin 准入白名单；配错会影响生成链接的可达性，但不会因不匹配阻断正常代理登录/退出。外部 HTTPS 下 `BABA_SHARE_SECURE_COOKIE=1` 只是浏览器 Cookie 的 Secure 属性，不要求上游 HTTPS。域名准入、TLS 和入口限流由网关负责；应用保留认证、角色/工作区权限、未登录 401 导航、对 `Origin: null` 与明确跨站浏览器请求的阻断，也不会盲目信任 `X-Forwarded-*`。
 
-从实际公开 HTTPS 页面进入个人中心复制说明，页面将自动生成与当前部署 origin 一致的 MCP 地址。更多部署配置见项目 `DEPLOYMENT.md`。
+监听地址/唯一端口由 `BABA_SHARE_HOST`、`BABA_SHARE_PORT` 配置。主页面、API、MCP 与 `/baba-share/preview/{s|p}/token/...` 原始预览复用同一端口。预览响应通过 CSP `sandbox`（不含 `allow-same-origin`）使用不透明来源隔离，而不是第二监听端口。代理不得移除或放宽 CSP、`Cache-Control`、`Set-Cookie` 等上游安全响应头、缓存带票据页面，或把原始上传目录作为普通静态站点另行发布。反向代理应原样保留 `/baba-share/`（含预览）和 `/api/baba-share/core/v1/` 路径并转发 `Authorization`；建议规范转发实际公开 `Host` 等头供运维使用，但透传公开 Host 不是认证的必要条件。不要记录 Authorization、Cookie、密钥或带预览票据的完整路径。
+
+从实际公开 HTTPS 页面进入个人中心复制说明，页面将自动生成与当前浏览器 origin 一致的 MCP 地址，而不是依赖 `PUBLIC_ORIGIN` 选择 MCP 入口。可复制的 Nginx 单上游配置和更多部署说明见项目 `DEPLOYMENT.md`。
 
 ## 8. MCP 权限与工具
 
@@ -264,28 +266,28 @@ Content-Type: application/json
 {"id":"<KEY_ID>"}
 ```
 
-仅接受当前用户有效 Cookie + 精确可信 Origin；MCP Bearer 不能调用。返回 `{ "key": "<FULL_KEY>" }`，带 `Cache-Control: no-store`，不在日志中记录。敏感内容不通过 GET、URL、列表或桥接通信返回；该 POST 只读取凭据，不生成新密钥。跨用户返回 `404 MCP_KEY_NOT_EXIST`；撤销或过期返回 `409 MCP_KEY_INACTIVE`；旧密钥无派生标记返回 `409 MCP_KEY_NOT_RECOVERABLE`。不会自动撤销或轮换。
+仅接受当前用户有效 Cookie，并应用与其他浏览器 API 相同的来源防护：拒绝 `Origin: null` 和明确的跨站浏览器请求，不将 Origin/Host 与 `PUBLIC_ORIGIN` 绑定；MCP Bearer 不能调用。返回 `{ "key": "<FULL_KEY>" }`，带 `Cache-Control: no-store`，不在日志中记录。敏感内容不通过 GET、URL、列表或桥接通信返回；该 POST 只读取凭据，不生成新密钥。跨用户返回 `404 MCP_KEY_NOT_EXIST`；撤销或过期返回 `409 MCP_KEY_INACTIVE`；旧密钥无派生标记返回 `409 MCP_KEY_NOT_RECOVERABLE`。不会自动撤销或轮换。
 
 主密钥 `<DATA_DIR>/data/mcp-key-master` 是随机 32 字节，以排他创建方式生成（POSIX 0600），仅首次真正创建新密钥时生成。拒绝符号链接、不安全权限、读取失败及错误长度。已有派生密钥时主密钥缺失不会重建；每次恢复还以 `key_hash` 验证结果，丢失或替换 master 返回 `503 MCP_KEY_RECOVERY_UNAVAILABLE`，绝不返回错误凭据。完整备份和迁移必须同时保护数据库、filedb 与该 master；master 泄露等价于可恢复数据库中全部新密钥。启动自动添加可空派生列，旧密钥仍可用于鉴权但不可恢复。
 
-### 撤销
+### 删除
 
 ```text
 DELETE /api/baba-share/core/v1/mcp-key?id=<KEY_ID>
 ```
 
-只能撤销本人密钥，成功返回 `{}`。其他错误包括 `409 MCP_KEY_LIMIT`、`400 PARAM_INVALID`、`404 MCP_KEY_NOT_EXIST`、`401 AUTH_REQUIRED`；客户端用 HTTP 状态及响应 `status` 判断，不展示服务端原始调试信息。
+只能删除本人密钥，成功返回 `{}`，重复删除幂等。物理删除整条 `auth_mcp_key` 记录（含鉴权摘要、派生 nonce/版本及请求恢复上下文），后续认证立即 401、内容恢复返回 `404 MCP_KEY_NOT_EXIST`；个人中心立即移除卡片，不保留新「已撤销」记录。有效、过期、历史已撤销密钥均可主动删除；启动不会自动清理历史 revoked 数据。删除不会修改其他密钥或共享 master。SQLite 连接启用 secure_delete，清除本次删除记录在当前数据库释放页中的内容；这不等于擦除历史备份、快照或存储设备物理介质。其他错误包括 `409 MCP_KEY_LIMIT`、`400 PARAM_INVALID`、`404 MCP_KEY_NOT_EXIST`、`401 AUTH_REQUIRED`；客户端用 HTTP 状态及响应 `status` 判断，不展示服务端原始调试信息。
 
 ## 10. 排查与安全边界
 
 - 仅检查环境变量是否存在，不回显其值；不要输出环境变量全集、Authorization、完整配置或密钥，也不要将其写入日志、shell 历史或项目文件。
 - **401 / AUTH_REQUIRED**：检查客户端进程是否继承环境变量、密钥是否过期或已撤销、账户是否被禁用；不要把密钥贴入诊断日志。
-- **403 / ORIGIN_DENIED**：检查当前来源、反向代理和可信 HTTPS；不要绕过来源校验。
+- **403 / ORIGIN_DENIED**：检查是否为沙箱 `Origin: null` 或明确跨站浏览器请求，并区分网关拒绝与角色权限不足；不要绕过来源防护。`PUBLIC_ORIGIN` 与上游 Host/浏览器 Origin 不一致不应阻断正常代理登录/退出；链接指向错误时才需校正该 URL 配置。
 - **HTTP 200 + `result.isError=true`**：这是工具业务错误。`PERMISSION_DENIED`、`READ_ONLY`、`FOREIGN_CONTENT` 表示角色、工作区或内容归属权限不足；`MCP_THROTTLED` 表示需要等待限流窗口。
 - **JSON-RPC `error`**：检查协议版本、方法名和参数 schema。
 - **连接失败**：检查实际域名/端口、反代 API 路由、Authorization 转发和可信证书；不要把另一台机器的 localhost 当作服务地址。
 - **配置后没有变化**：重启客户端，并确认它从设置过变量的环境启动；CLI 配置操作成功不等于客户端进程已获得变量。
-- 完成复制后清理剪贴板，密钥泄露时立即撤销。
+- 完成复制后清理剪贴板，密钥泄露时立即删除。
 
 ## 11. 密钥恢复常见问题
 

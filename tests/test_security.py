@@ -66,7 +66,11 @@ class SecurityHttpTests(unittest.TestCase):
         request_headers = {"Origin": cls.config.public_origin, "Content-Type": "application/json"}
         if actor:
             request_headers["Cookie"] = cls.cookies[actor]
-        request_headers.update(headers or {})
+        for name, value in (headers or {}).items():
+            if value is None:
+                request_headers.pop(name, None)
+            else:
+                request_headers[name] = value
         raw = json.dumps(body).encode() if body is not None else None
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
         try:
@@ -328,6 +332,34 @@ class SecurityHttpTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assert_sandbox(headers)
 
+    def test_raw_preview_drops_accidental_set_cookie(self):
+        handler = self.app.handler()
+        original = handler.reply
+
+        def accidental_cookie(request, *args, **kwargs):
+            kwargs["cookie"] = "must-not-leak"
+            kwargs["headers"] = {**kwargs.get("headers", {}), "set-cookie": "injected=must-not-leak"}
+            return original(request, *args, **kwargs)
+
+        with mock.patch.object(handler, "reply", accidental_cookie):
+            from http.server import ThreadingHTTPServer
+            server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+                connection.request("GET", "/baba-share/preview/invalid")
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 404)
+                self.assertIsNone(response.getheader("Set-Cookie"))
+                self.assertIn("sandbox allow-scripts;", response.getheader("Content-Security-Policy"))
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join()
+
     def test_malformed_preview_request_keeps_sandbox(self):
         import socket
         for request in (b"GET /baba-share/preview/s/token/index.html HTTP/invalid\r\n\r\n",
@@ -341,10 +373,17 @@ class SecurityHttpTests(unittest.TestCase):
 
     def test_null_origin_cannot_read_or_mutate_cookie_api(self):
         for method, route, body in (("GET", "/session/detail", None),
-                                    ("POST", "/workspace", {"workspaceName": "blocked-opaque"})):
-            status, data, headers = self.request(method, route, "owner", body, headers={"Origin": "null"})
-            self.assertEqual((status, data["status"]), (403, "ORIGIN_DENIED"))
-            self.assertNotIn("access-control-allow-origin", headers)
+                                    ("GET", "/visitor/install/detail", None),
+                                    ("POST", "/visitor/session", {"userName": "qa-owner", "password": "qa-isolated-password-123"}),
+                                    ("POST", "/workspace", {"workspaceName": "blocked-opaque"}),
+                                    ("DELETE", "/session", None)):
+            for site in (None, "same-origin", "none", "cross-site"):
+                with self.subTest(route=route, site=site):
+                    status, data, headers = self.request(method, route, "owner", body, headers={"Origin": "null", "Sec-Fetch-Site": site})
+                    self.assertEqual((status, data["status"]), (403, "ORIGIN_DENIED"))
+                    self.assertNotIn("access-control-allow-origin", headers)
+                    self.assertNotIn("set-cookie", headers)
+        self.assertEqual(self.request("GET", "/session/detail", "owner")[0], 200)
         status, _, headers = self.request("POST", "/mcp", "owner", {"jsonrpc": "2.0", "id": 1, "method": "ping"}, headers={"Origin": "null"})
         self.assertEqual(status, 403)
         self.assertNotIn("access-control-allow-origin", headers)
@@ -459,6 +498,185 @@ assert.equal(get('#shared-frame').src,context.previewBase+'sub/index.html');
         self.ok("DELETE", "/member", "owner", query={"workspaceId": self.workspace, "userId": self.users["viewer"]["id"]})
         self.assertEqual(self.request("GET", path, preview=True)[0], 403)
 
+    def test_gateway_origin_mismatch_preserves_authentication_and_permission_semantics(self):
+        headers = {"Origin": "https://product.rd.chn-das.com", "Host": "127.0.0.1:8080", "Sec-Fetch-Site": "same-origin"}
+        status, data, _ = self.request("POST", "/visitor/session", body={"userName": "qa-admin", "password": "wrong-password"}, headers=headers)
+        self.assertEqual((status, data["status"]), (401, "LOGIN_FAILED"))
+        status, data, _ = self.request("GET", "/session/detail", headers={**headers, "Cookie": "baba_share_session=expired"})
+        self.assertEqual((status, data["status"]), (401, "AUTH_REQUIRED"))
+        status, data, _ = self.request("POST", "/workspace", "viewer", {"workspaceName": "still-readonly"}, headers=headers)
+        self.assertEqual((status, data["status"]), (403, "READ_ONLY"))
+        self.assertEqual(self.request("GET", "/session/detail", actor="viewer", headers=headers)[0], 200)
+
+    def test_gateway_https_to_http_install_login_logout_ignore_public_origin_and_host(self):
+        for configured in ("http://127.0.0.1:8080", "http://product.rd.chn-das.com", "https://other.example:9443"):
+            with self.subTest(public_origin=configured), mock.patch.object(self.config, "public_origin", configured), mock.patch.object(self.config, "secure_cookie", True):
+                headers = {"Origin": "https://product.rd.chn-das.com", "Host": "127.0.0.1:8080", "Sec-Fetch-Site": "same-origin"}
+                for origin in (None, headers["Origin"]):
+                    status, data, _ = self.request("GET", "/visitor/install/detail", headers={**headers, "Origin": origin})
+                    self.assertEqual(status, 200, data)
+                    self.assertFalse(data["setupRequired"])
+                status, user, response_headers = self.request("POST", "/visitor/session", body={"userName": "qa-admin", "password": "qa-isolated-password-123"}, headers=headers)
+                self.assertEqual((status, user["id"]), (200, self.users["admin"]["id"]))
+                self.assertIn("; Secure", response_headers["set-cookie"])
+                cookie = response_headers["set-cookie"].split(";", 1)[0]
+                authenticated = {**headers, "Cookie": cookie}
+                self.assertEqual(self.request("GET", "/session/detail", headers=authenticated)[0], 200)
+                status, data, response_headers = self.request("DELETE", "/session", headers=authenticated)
+                self.assertEqual((status, data), (200, {}))
+                self.assertIn("Max-Age=0", response_headers["set-cookie"])
+                status, data, _ = self.request("GET", "/session/detail", headers=authenticated)
+                self.assertEqual((status, data["status"]), (401, "AUTH_REQUIRED"))
+
+    def test_gateway_without_fetch_metadata_does_not_require_origin_or_forwarded_headers(self):
+        for headers in ({"Origin": None, "Host": "internal-gateway:8080"},
+                        {"Origin": "https://tenant.example", "Host": "internal-gateway:8080"},
+                        {"Origin": "https://tenant.example", "Host": "other-internal:8080", "X-Forwarded-Host": "untrusted.invalid", "X-Forwarded-Proto": "http", "Forwarded": "host=untrusted.invalid;proto=http"}):
+            with self.subTest(headers=headers):
+                self.assertEqual(self.request("GET", "/visitor/install/detail", headers=headers)[0], 200)
+                status, _, response_headers = self.request("POST", "/visitor/session", body={"userName": "qa-admin", "password": "qa-isolated-password-123"}, headers=headers)
+                self.assertEqual(status, 200)
+                self.assertNotIn("; Secure", response_headers["set-cookie"])
+                authenticated = {**headers, "Cookie": response_headers["set-cookie"].split(";", 1)[0]}
+                self.assertEqual(self.request("DELETE", "/session", headers=authenticated)[0], 200)
+
+    def test_preview_csp_is_not_bound_to_configured_public_origin(self):
+        share = self.make_share()
+        with mock.patch.object(self.config, "public_origin", "https://other.example"):
+            status, _, headers = self.request("GET", "/baba-share/preview/s/" + share["token"] + "/index.html", preview=True,
+                                              headers={"Origin": "null", "Host": "127.0.0.1:8080", "Sec-Fetch-Site": "cross-site"})
+        self.assertEqual(status, 200)
+        self.assert_sandbox(headers)
+        self.assertIn("frame-ancestors 'self'", headers["content-security-policy"])
+        self.assertNotIn("https://other.example", headers["content-security-policy"])
+
+    @unittest.skipUnless(shutil.which("node"), "认证导航动态执行需要Node.js")
+    def test_frontend_login_and_session_expiry_regressions(self):
+        script = r'''
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const assets=process.argv[1],origin='http://127.0.0.1:12345';
+class Element {
+ constructor(tag='div'){this.tag=tag;this.children=[];this.events={};this.dataset={};this.style={};this.value='';this.textContent='';this.disabled=false;this.attributes={};this.classList={add(){},remove(){},toggle(){}};}
+ append(...items){this.children.push(...items.filter(x=>x!=null));}
+ prepend(...items){this.children.unshift(...items);}
+ replaceChildren(...items){this.children=[];this.append(...items);}
+ setAttribute(k,v){this.attributes[k]=v;if(k==='value')this.value=v;if(k==='name')this.name=v;if(k==='id')this.id=v;}
+ getAttribute(k){return this.attributes[k];}
+ addEventListener(k,fn){this.events[k]=fn;}
+ removeEventListener(k,fn){if(this.events[k]===fn)delete this.events[k];}
+ querySelector(){return null;}
+ querySelectorAll(){return [];}
+ get elements(){const found=[];const walk=n=>{if(n.name)found.push(n);for(const x of n.children||[])if(typeof x==='object')walk(x);};walk(this);found.namedItem=name=>found.find(x=>x.name===name);return found;}
+}
+function runtime(path='workspace.html'){
+ const nodes=new Map(),events=new Map(),replaces=[],requests=[];
+ const get=s=>{if(!nodes.has(s))nodes.set(s,new Element());return nodes.get(s);};
+ const location={href:origin+'/baba-share/'+path,origin,protocol:'http:',pathname:'/baba-share/'+path,replace:u=>replaces.push(u),reload(){}};
+ const document={readyState:'complete',documentElement:{lang:'zh-CN',dataset:{mode:'dark'}},body:new Element('body'),createElement:t=>new Element(t),createElementNS:(ns,t)=>new Element(t),createTextNode:text=>String(text),querySelector:s=>s==='script[src$="common.js"]'?{src:origin+'/baba-share/assets/common.js'}:get(s),querySelectorAll:()=>[]};
+ const context={URL,console,setTimeout,clearTimeout,queueMicrotask,location,document,history:{replaceState(){}},FormData:class{constructor(form){return form.elements.filter(n=>n.name&&!n.disabled).map(n=>[n.name,n.value]);}},I18n:{t:k=>k,accents:['blue','green','purple','red','orange','teal'],normalizeContext:ctx=>({locale:ctx.locale,theme:ctx.theme,dir:ctx.dir,accent:ctx.accent||'blue'}),ctx:{locale:'zh-CN',theme:'dark',dir:'ltr',accent:'blue'},subscribe(){},apply(){},persist(){}},fetch:async(url,options)=>{requests.push({url:String(url),options});return {status:context.code,ok:context.code<400,json:async()=>context.data};},code:401,data:{status:'AUTH_REQUIRED'},addEventListener:(name,fn)=>{if(!events.has(name))events.set(name,new Set());events.get(name).add(fn);},removeEventListener:(name,fn)=>events.get(name)?.delete(fn)};
+ context.window=context;context.parent=context;vm.createContext(context);
+ const load=file=>vm.runInContext(fs.readFileSync(assets+'/'+file,'utf8'),context);
+ load('common.js');load('api.js');
+ return {context,load,get,events,replaces,requests};
+}
+const settle=()=>new Promise(resolve=>setImmediate(resolve));
+(async()=>{
+ // 未登录及并发401使用固定安全地址，忽略恶意returnUrl。
+ for(const path of ['index.html?returnUrl=https://evil.invalid','', 'workspace.html','account.html','users.html']){
+  const r=runtime(path);r.context.location.pathname='/baba-share/'+path.split('?')[0];
+  await Promise.allSettled([r.context.API('me'),r.context.API('workspaces'),r.context.API('users')]);
+  assert.deepEqual(r.replaces,[origin+'/baba-share/auth.html']);
+ }
+ // 只有固定退出DELETE例外，业务调用即使传authRequired:false也不能绕过401处理。
+ {
+  const r=runtime();await assert.rejects(r.context.API('me',{authRequired:false}));assert.equal(r.replaces.length,1);
+  const other=runtime();await assert.rejects(other.context.API('session',{method:'GET',authRequired:false}));assert.equal(other.replaces.length,1);
+ }
+ // 错误凭据、匿名安装/注册/分享请求不引发注销；业务403保持当前会话。
+ for(const key of ['install','login','setup','registration','shareDetail']){
+  const r=runtime();await assert.rejects(r.context.API(key));assert.equal(r.replaces.length,0,key);
+ }
+ for(const status of ['PERMISSION_DENIED','READ_ONLY','ORIGIN_DENIED']){
+  const r=runtime();r.context.code=403;r.context.data={status};await assert.rejects(r.context.API('workspace',{method:'POST',body:{}}),e=>e.httpStatus===403&&e.status===status);assert.equal(r.replaces.length,0);
+ }
+ for(const path of ['auth.html','share.html','s/anonymous-token']){
+  const r=runtime(path);await assert.rejects(r.context.API('me'));assert.equal(r.replaces.length,0,path);
+ }
+ // 独立页面通过真实adapter跳转，即使有未保存状态也不会被拦住。
+ {
+  const r=runtime();r.load('page-bridge.js');const page=r.context.UI.page();await page.ready;page.setDirty(true);
+  await assert.rejects(r.context.API('me'));assert.equal(page.dirty,false);assert.deepEqual(r.replaces,[origin+'/baba-share/auth.html']);
+ }
+ // 运行实际母版、版本化桥接、子页公共API。子页只通知母版，母版并发也只replace一次。
+ {
+  const host=runtime('index.html'),child=runtime('workspace.html');
+  const dispatch=(runtime,event)=>{for(const fn of runtime.events.get('message')||[])fn(event);};
+  const hostProxy={location:{origin},postMessage:message=>queueMicrotask(()=>dispatch(host,{origin,source:childProxy,data:message}))};
+  const childProxy={postMessage:message=>queueMicrotask(()=>dispatch(child,{origin,source:hostProxy,data:message}))};
+  child.context.parent=hostProxy;host.get('#page-frame').contentWindow=childProxy;
+  host.load('bridge-core.js');host.load('app-bridge.js');child.load('bridge-core.js');child.load('page-bridge.js');
+  host.context.API=async key=>key==='install'?{setupRequired:false}:key==='me'?{nickname:'Viewer',role:'viewer'}:[];
+  await host.load('shell.js');assert.equal(host.get('#new-workspace').hidden,true);
+  const page=child.context.UI.page();await page.ready;assert.equal(page.embedded,true);page.setDirty(true);
+  await Promise.allSettled([child.context.API('me'),child.context.API('workspaces'),host.context.UI.sessionExpired()]);
+  assert.equal(child.replaces.length,0);assert.deepEqual(host.replaces,[origin+'/baba-share/auth.html']);assert.equal(page.dirty,false);
+  for(const fn of host.events.get('pagehide')||[])fn();for(const fn of child.events.get('pagehide')||[])fn();
+ }
+ // 退出401已无有效会话；403/网络未确认退出，均不阻塞返回登录。
+ for(const code of [200,401,403,'network']){
+  const r=runtime('index.html'),api=r.context.API;r.load('bridge-core.js');r.load('app-bridge.js');
+  r.context.API=async key=>key==='install'?{setupRequired:false}:key==='me'?{nickname:'Viewer',role:'viewer'}:[];
+  await r.load('shell.js');r.context.API=api;
+  r.context.code=code;r.context.data=code===403?{status:'ORIGIN_DENIED'}:code===401?{status:'AUTH_REQUIRED'}:{};
+  if(code==='network')r.context.fetch=async()=>{throw new TypeError('offline')};
+  await r.get('#logout').events.click();
+  assert.deepEqual(r.replaces,[origin+'/baba-share/auth.html'+([200,401].includes(code)?'':'?logout=failed')]);
+  for(const fn of r.events.get('pagehide')||[])fn();
+ }
+ // 实际母版启动请求未登录me401时立即自动跳登录，不依赖退出按钮。
+ {
+  const r=runtime('index.html');r.load('bridge-core.js');r.load('app-bridge.js');
+  r.context.fetch=async url=>String(url).endsWith('/visitor/install/detail')?{status:200,ok:true,json:async()=>({setupRequired:false})}:{status:401,ok:false,json:async()=>({status:'AUTH_REQUIRED'})};
+  await r.load('shell.js');assert.deepEqual(r.replaces,[origin+'/baba-share/auth.html']);
+  for(const fn of r.events.get('pagehide')||[])fn();
+ }
+ // 登录页将退出未确认状态保留下来；即使install仍403也不会丢失告知。
+ for(const code of [200,403]){
+  const r=runtime('auth.html?logout=failed');r.context.location.pathname='/baba-share/auth.html';r.context.code=code;
+  r.context.data=code===200?{setupRequired:false,registrationEnabled:false}:{status:'ORIGIN_DENIED'};
+  await r.load('auth.js');assert(r.get('#auth-status').textContent.includes('logoutUnconfirmed'));
+  if(code===403)assert(r.get('#auth-status').textContent.includes('originDenied'));
+ }
+ // 握手降级和连接失败也有安全的本页登录导航，不向父文档读写DOM。
+ {
+  const r=runtime();r.context.AppPage={setDirty(){},request:async()=>{throw Error('BRIDGE_CLOSED')}};
+  await assert.rejects(r.context.API('me'));assert.deepEqual(r.replaces,[origin+'/baba-share/auth.html']);
+ }
+ // 真实auth脚本：安装状态成功后匿名登录/初始化/注册均可提交；失败凭据留在登录页并恢复按钮。
+ for(const [setupRequired,registrationEnabled,query,mode] of [[false,false,'','login'],[true,false,'','setup'],[false,true,'?mode=register','registration']]){
+  const r=runtime('auth.html'+query);r.context.location.pathname='/baba-share/auth.html';r.context.code=200;r.context.data={setupRequired,registrationEnabled};
+  await r.load('auth.js');assert.equal(r.get('#auth-submit').disabled,false,mode);
+  for(const input of r.get('#auth-fields').elements)input.value=input.name==='password'?'123456':'anonymous';
+  const password=r.get('#auth-fields').elements.namedItem('password');
+  password.value='12345';assert.equal(password.validate(),mode==='login',mode+' 五字符边界');
+  password.value='123456';assert.equal(password.validate(),true,mode+' 六字符边界');
+  password.value='x'.repeat(257);assert.equal(password.validate(),mode==='login',mode+' 密码上限');
+  password.value='123456';
+  r.get('#auth-form').append(r.get('#auth-fields'));r.context.code=401;r.context.data={status:'LOGIN_FAILED'};
+  await r.get('#auth-form').events.submit({preventDefault(){}});
+  assert(r.requests.at(-1).url.includes(mode==='setup'?'/visitor/account/setup':mode==='registration'?'/visitor/account/registration':'/visitor/session'));
+  assert.equal(r.replaces.length,0);assert.equal(r.get('#auth-submit').disabled,false);assert.equal(r.get('#auth-status').textContent,'loginFailed');
+ }
+ // 初始化来源拒绝时保留失败关闭行为，但明确显示来源配置错误，不再误称权限不足。
+ {
+  const r=runtime('auth.html');r.context.code=403;r.context.data={status:'ORIGIN_DENIED'};await r.load('auth.js');
+  assert.equal(r.get('#auth-submit').disabled,true);assert.equal(r.get('#auth-status').textContent,'originDenied');assert.equal(r.replaces.length,0);
+ }
+})().catch(e=>{console.error(e);process.exitCode=1});
+'''
+        executed = subprocess.run(["node", "-e", script, str(self.config.web_dir / "assets")], capture_output=True, text=True, timeout=20)
+        self.assertEqual(executed.returncode, 0, executed.stderr)
+
     @unittest.skipUnless(shutil.which("node"), "桥接协议动态执行需要Node.js")
     def test_bridge_rejects_wrong_origin_source_version_and_cleans_pending(self):
         source = Path(__file__).resolve().parents[1] / "web" / "assets" / "bridge-core.js"
@@ -544,7 +762,7 @@ if(!rejected)throw Error('未拒绝未知API键');process.stdout.write(JSON.stri
 
     def test_csrf_rejection_drains_large_body_and_returns_complete_error(self):
         body = {"workspaceId": self.workspace, "path": "csrf-body-test", "ignoredPadding": "x" * (256 * 1024)}
-        for headers in ({"Origin": "http://untrusted.invalid"}, {"Origin": "null"}, {"Sec-Fetch-Site": "cross-site"}):
+        for headers in ({"Origin": "http://untrusted.invalid", "Sec-Fetch-Site": "cross-site"}, {"Origin": "null"}, {"Sec-Fetch-Site": "cross-site"}, {"Sec-Fetch-Site": "same-site"}):
             with self.subTest(headers=headers):
                 status, data, _ = self.request("POST", "/folder", "owner", body, headers=headers)
                 self.assertEqual(status, 403)
@@ -555,10 +773,18 @@ if(!rejected)throw Error('未拒绝未知API键');process.stdout.write(JSON.stri
 
     def test_csrf_and_auth_guards(self):
         self.denied("GET", "/workspace/list", None, expected=401)
-        status, _, _ = self.request("POST", "/folder", "owner", {"workspaceId": self.workspace, "path": "csrf"}, headers={"Origin": "http://untrusted.invalid"})
-        self.assertEqual(status, 403)
-        status, _, _ = self.request("GET", "/session/detail", "owner", headers={"Host": "untrusted.invalid"})
-        self.assertEqual(status, 403)
+        for site in ("cross-site", "same-site", "", "invalid"):
+            for origin in (None, "https://product.rd.chn-das.com"):
+                with self.subTest(site=site, origin=origin):
+                    headers = {"Origin": origin, "Sec-Fetch-Site": site, "Host": "internal-gateway:8080", "X-Forwarded-Host": "product.rd.chn-das.com", "X-Forwarded-Proto": "https"}
+                    for method, route, body in (("GET", "/session/detail", None),
+                                                ("POST", "/folder", {"workspaceId": self.workspace, "path": "csrf"}),
+                                                ("DELETE", "/session", None)):
+                        status, data, _ = self.request(method, route, "owner", body, headers=headers)
+                        self.assertEqual((status, data["status"]), (403, "ORIGIN_DENIED"))
+        for site in (None, "same-origin", "none"):
+            self.assertEqual(self.request("GET", "/session/detail", "owner", headers={"Sec-Fetch-Site": site, "Host": "internal-gateway:8080"})[0], 200)
+        self.assertFalse(self.app.service.disk_path(self.workspace, "csrf").exists())
 
 
 if __name__ == "__main__":

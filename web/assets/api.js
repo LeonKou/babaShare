@@ -14,6 +14,9 @@
     workspace: "/workspace",
     members: "/member/list",
     member: "/member",
+    invitations: "/invitation/list",
+    invitation: "/invitation",
+    invitationMembership: "/invitation/membership",
     nodes: "/node/list",
     folder: "/folder",
     file: "/file",
@@ -33,6 +36,13 @@
   };
   window.API = (key, options) => {
     if (!Object.hasOwn(paths, key)) throw new Error("API_NOT_ALLOWED");
-    return UI.api(base + paths[key], options);
+    const anonymous = ["install", "setup", "registration", "login", "shareDetail"];
+    return UI.api(base + paths[key], {
+      ...options,
+      // 退出操作自行在finally导航，失败也必须能离开工作台。
+      authRequired:
+        !(key === "session" && options?.method === "DELETE") &&
+        !anonymous.includes(key),
+    });
   };
 })();

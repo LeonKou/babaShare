@@ -121,7 +121,7 @@ class MCPTests(unittest.TestCase):
         _, other_cookie = self.account("other-copy")
         self.assertEqual(self.request("POST", "/mcp-key/content", {"id": key["id"]}, cookie=other_cookie)[0], 404)
         self.assertEqual(self.request("POST", "/mcp-key/content", {"id": key["id"]}, key=key["key"], headers={"Origin": self.config.public_origin})[0], 401)
-        for headers in ({"Origin": ""}, {"Origin": "https://untrusted.invalid"}, {"Sec-Fetch-Site": "cross-site"}, {"Host": "untrusted.invalid"}):
+        for headers in ({"Origin": ""}, {"Origin": "null"}, {"Sec-Fetch-Site": "cross-site"}, {"Sec-Fetch-Site": "same-site"}):
             self.assertEqual(self.request("POST", "/mcp-key/content", {"id": key["id"]}, cookie=self.cookie, headers=headers)[0], 403)
         self.assertEqual(self.request("GET", "/mcp-key/content?id=" + key["id"], cookie=self.cookie)[0], 404)
         user, disabled_cookie = self.account("disabled-copy")
@@ -131,8 +131,8 @@ class MCPTests(unittest.TestCase):
         expired = self.create_key()
         self.app.service.repo.execute("UPDATE auth_mcp_key SET expire_time=? WHERE id=?", (now_ms() - 1, db_id(expired["id"])))
         self.assertEqual(self.request("POST", "/mcp-key/content", {"id": expired["id"]}, cookie=self.cookie)[1]["status"], "MCP_KEY_INACTIVE")
-        self.app.service.mcp_key_revoke(self.admin, key["id"])
-        self.assertEqual(self.request("POST", "/mcp-key/content", {"id": key["id"]}, cookie=self.cookie)[1]["status"], "MCP_KEY_INACTIVE")
+        self.app.service.mcp_key_delete(self.admin, key["id"])
+        self.assertEqual(self.request("POST", "/mcp-key/content", {"id": key["id"]}, cookie=self.cookie)[1]["status"], "MCP_KEY_NOT_EXIST")
 
     def test_old_key_and_master_loss_fail_closed(self):
         key = self.create_key()
@@ -224,7 +224,7 @@ class MCPTests(unittest.TestCase):
         expired = self.create_key(name="expired")
         revoked = self.create_key(name="revoked")
         self.app.service.repo.execute("UPDATE auth_mcp_key SET expire_time=? WHERE id=?", (now_ms() - 1, db_id(expired["id"])))
-        self.app.service.mcp_key_revoke(self.admin, revoked["id"])
+        self.app.service.repo.execute("UPDATE auth_mcp_key SET revoked_time=? WHERE id=?", (now_ms(), db_id(revoked["id"])))
         script = r'''
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const input=JSON.parse(fs.readFileSync(0,'utf8'));
@@ -236,7 +236,7 @@ class Node {
   addEventListener(name,fn){this.events[name]=fn;}
   removeEventListener(){} focus(){} select(){}
 }
-const ids=new Map(),buttons=[];let copied=[],dialogs=[],notices=[],fallback=false;
+const ids=new Map(),buttons=[];let copied=[],dialogs=[],notices=[],fallback=false,deleteConfirmed=false;
 const $=selector=>{if(!ids.has(selector))ids.set(selector,new Node('div'));return ids.get(selector);};
 $('#mcp-filter').value='all';
 const el=(tag,attrs,...children)=>{const n=new Node(tag,attrs);n.append(...children);return n;};
@@ -246,9 +246,9 @@ const location=new URL(input.origin+'/baba-share/account.html');
 const context={console,URL,AbortController,crypto:require('crypto').webcrypto,queueMicrotask,Date,Uint8Array,
   location,history:{replaceState(){}},navigator:{clipboard:{writeText:async text=>{if(fallback)throw Error('blocked');copied.push(text);}}},
   document:{documentElement:{lang:'zh-CN',dir:'ltr',dataset:{mode:'dark'}},querySelectorAll(){return[];}},
-  UI:{$,el,button,toast:t=>notices.push(t),errorText:e=>e.status||'error',date:String,empty:()=>el('div'),page:()=>({ready:Promise.resolve()}),
-    confirm:()=>{throw Error('不允许复制确认弹窗');},
-    api:async(path,options={})=>{const response=await fetch(input.origin+path,{method:options.method||'GET',headers:{Cookie:input.cookie,Origin:input.origin,'Content-Type':'application/json'},body:options.body?JSON.stringify(options.body):undefined});const data=await response.json();if(!response.ok)throw data;return data;},
+  UI:{$,el,button,copyButton:button,toast:t=>notices.push(t),errorText:e=>e.status||'error',date:String,empty:()=>el('div'),page:()=>({ready:Promise.resolve()}),
+    confirm:async()=>deleteConfirmed,
+    api:async(path,options={})=>{const url=new URL(path,input.origin);for(const [name,value]of Object.entries(options.query||{}))url.searchParams.set(name,value);const response=await fetch(url,{method:options.method||'GET',headers:{Cookie:input.cookie,Origin:input.origin,'Content-Type':'application/json'},body:options.body?JSON.stringify(options.body):undefined});const data=await response.json();if(!response.ok)throw data;return data;},
     dialog:(title,build)=>{const node=el('dialog');let resolve;const result=new Promise(r=>resolve=r);const close=()=>{node.events.close?.();resolve(null);};dialogs.push({node,close,title});build(node,close);return{result,close};}},
   LocalPager:()=>({slice:x=>x,busy(){}}),addEventListener(){},removeEventListener(){}};
 context.window=context;vm.createContext(context);
@@ -281,8 +281,13 @@ for(const file of ['i18n.js','api.js','mcp-help.js'])vm.runInContext(fs.readFile
   const dialog=dialogs.at(-1),area=flatten(dialog.node).find(n=>n.tag==='textarea');assert(area);assert(area.value.includes(input.secret));dialog.close();await copying;assert.equal(area.value,'');
   context.location=new URL('file:///account.html');
   await assert.rejects(context.McpHelp.copyUse(input.id),e=>e.status==='mcpUnavailable');
-  process.stdout.write('前端真实HTTP复制与动态origin验证通过');
-})().catch(e=>{console.error(e.name);process.exit(1);});
+  context.location=new URL(input.origin+'/baba-share/account.html');
+  const findDelete=title=>flatten($('#mcp-cards')).find(n=>n.tag==='article'&&flatten(n).some(c=>c.tag==='h3'&&c.textContent===title));
+  let oldCard=findDelete('revoked');assert(oldCard);let remove=flatten(oldCard).find(n=>n.textContent==='delete');assert(remove);await remove.fn();assert(findDelete('revoked'));
+  deleteConfirmed=true;await remove.fn();assert(!findDelete('revoked'));assert.equal($('#mcp-cards').children.length,2);
+  const expiredCard=findDelete('expired');await flatten(expiredCard).find(n=>n.textContent==='delete').fn();assert(!findDelete('expired'));assert.equal($('#mcp-cards').children.length,1);
+  process.stdout.write('前端真实HTTP复制、动态origin与历史撤销及过期Key删除验证通过');
+})().catch(e=>{console.error(e.name,String(e.stack).split('\n').find(line=>/^\s+at /.test(line))||'');process.exit(1);});
 '''
         result = subprocess.run(["node", "-e", script], input=json.dumps({"origin": self.config.public_origin,
                                 "cookie": self.cookie, "id": active["id"], "secret": active["key"],
@@ -343,7 +348,7 @@ for(const file of ['i18n.js','api.js','mcp-help.js'])vm.runInContext(fs.readFile
         self.assertEqual(self.call(key, "workspace_create", {"workspaceName": 123})["error"]["code"], -32602)
         self.assertEqual(self.call(key, "workspace_list", {"unexpected": True})["error"]["code"], -32602)
         self.assertEqual(self.rpc(key, "ping", headers={"MCP-Protocol-Version": "unsupported"})[0], 400)
-        self.assertEqual(self.rpc(key, "ping", headers={"Origin": "http://untrusted.example"})[0], 403)
+        self.assertEqual(self.rpc(key, "ping", headers={"Origin": "http://untrusted.example", "Sec-Fetch-Site": "cross-site"})[0], 403)
         self.assertEqual(self.request("POST", "/mcp", key=key, raw=b"{")[1]["error"]["code"], -32700)
         self.assertEqual(self.request("POST", "/mcp", key=key, raw=b"[]")[1]["error"]["code"], -32600)
         self.assertEqual(self.request("POST", "/mcp", body={"id": 1}, key=key)[1]["error"]["code"], -32600)

@@ -87,7 +87,7 @@
           required: true,
           hint: I18n.t("passwordHint"),
           validator: (v) =>
-            v.length < 10 || v.length > 256 ? I18n.t("passwordError") : "",
+            v.length < 6 || v.length > 256 ? I18n.t("passwordError") : "",
         },
         { key: "role", name: "role", value: "viewer", options: roles() },
       ],

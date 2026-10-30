@@ -38,8 +38,8 @@ def digest(token):
 
 
 def password_hash(password):
-    require(isinstance(password, str) and 10 <= len(password) <= 256,
-            msg="密码长度必须为10至256位")
+    require(isinstance(password, str) and 6 <= len(password) <= 256,
+            msg="密码长度必须为6至256位")
     salt = secrets.token_bytes(16)
     encoded = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 310000)
     return salt.hex() + ":" + encoded.hex()
@@ -215,7 +215,7 @@ class Service:
     def mcp_key_content(self, user, key_id):
         require(isinstance(key_id, str), msg="密钥ID不合法")
         with self.lock, self.repo.connection() as connection:
-            # 与创建及撤销串行；恢复只读取，不生成主密钥或新MCP凭据。
+            # 与创建及删除串行；恢复只读取，不生成主密钥或新MCP凭据。
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT id,key_hash,expire_time,revoked_time,mcp_derivation_version,mcp_derivation_nonce FROM auth_mcp_key WHERE id=? AND user_id=?",
                                      (db_id(key_id), db_id(user["id"]))).fetchone()
@@ -269,15 +269,14 @@ class Service:
                    "revoked_time": None, "create_time": stamp, "update_time": stamp}
             return {**self.mcp_key_view(row), "key": token}
 
-    def mcp_key_revoke(self, user, key_id):
-        with self.lock:
-            row = self.repo.one("SELECT id,revoked_time FROM auth_mcp_key WHERE id=? AND user_id=?",
-                                (db_id(key_id), db_id(user["id"])))
-            require(row, 404, "MCP_KEY_NOT_EXIST", "密钥不存在")
-            if row["revoked_time"] is None:
-                stamp = now_ms()
-                self.repo.execute("UPDATE auth_mcp_key SET revoked_time=?,update_time=? WHERE id=? AND user_id=? AND revoked_time IS NULL",
-                                  (stamp, stamp, db_id(key_id), db_id(user["id"])))
+    def mcp_key_delete(self, user, key_id):
+        with self.lock, self.repo.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT user_id FROM auth_mcp_key WHERE id=?", (db_id(key_id),)).fetchone()
+            if row:
+                require(row["user_id"] == db_id(user["id"]), 404, "MCP_KEY_NOT_EXIST", "密钥不存在")
+                connection.execute("DELETE FROM auth_mcp_key WHERE id=? AND user_id=?",
+                                   (db_id(key_id), db_id(user["id"])))
         return {}
 
     def mcp_authenticated(self, token):
@@ -390,10 +389,90 @@ class Service:
                 args = (db_id(workspace_id),)
                 connection.execute("DELETE FROM workspace_node WHERE workspace_id=?", args)
                 connection.execute("DELETE FROM workspace_member WHERE workspace_id=?", args)
+                connection.execute("DELETE FROM workspace_invitation WHERE workspace_id=?", args)
                 connection.execute("DELETE FROM folder_share WHERE workspace_id=?", args)
                 connection.execute("DELETE FROM preview_ticket WHERE workspace_id=?", args)
                 connection.execute("DELETE FROM project_workspace WHERE id=?", args)
             return {}
+
+    @staticmethod
+    def invitation_view(row):
+        return {"id": row["id"], "workspaceId": row["workspace_id"],
+                "collaborate": bool(row["is_collaborate"]), "expireTime": row["expire_time"],
+                "createTime": row["create_time"], "isActive": row["expire_time"] > now_ms()}
+
+    @staticmethod
+    def invitation_manager(connection, user_id, workspace_id):
+        actor = connection.execute("SELECT id,user_role,is_disabled FROM sys_user WHERE id=?", (db_id(user_id),)).fetchone()
+        require(actor and not actor["is_disabled"], 401, "AUTH_REQUIRED", "账号已失效")
+        workspace = connection.execute("SELECT id,owner_id FROM project_workspace WHERE id=?", (db_id(workspace_id),)).fetchone()
+        require(workspace, 404, "WORKSPACE_NOT_EXIST", "工作区不存在")
+        require(actor["user_role"] in ("admin", "editor") and
+                (actor["user_role"] == "admin" or workspace["owner_id"] == actor["id"]),
+                403, "PERMISSION_DENIED", "仅有效所有者和管理员可管理邀请")
+
+    def invitations(self, user, workspace_id):
+        with self.repo.connection() as connection:
+            self.invitation_manager(connection, user["id"], workspace_id)
+            rows = connection.execute("SELECT id,workspace_id,is_collaborate,expire_time,create_time FROM workspace_invitation WHERE workspace_id=? ORDER BY create_time DESC",
+                                      (db_id(workspace_id),)).fetchall()
+            return [self.invitation_view(public_row(row)) for row in rows]
+
+    def invitation_create(self, user, body):
+        workspace_id, request_id = body.get("workspaceId"), body.get("requestId")
+        collaborate, hours = body.get("collaborate", False), body.get("expireHours", 168)
+        require(type(collaborate) is bool and type(hours) is int and 1 <= hours <= 720)
+        require(isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{16,100}", request_id),
+                msg="requestId必须为16至100位随机请求标识")
+        fingerprint = digest(str(workspace_id) + "\n" + str(collaborate) + "\n" + str(hours))
+        with self.lock, self.repo.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self.invitation_manager(connection, user["id"], workspace_id)
+            previous = connection.execute("SELECT request_hash FROM workspace_invitation WHERE creator_id=? AND request_id=?",
+                                          (db_id(user["id"]), request_id)).fetchone()
+            if previous:
+                require(previous["request_hash"] == fingerprint, 409, "REQUEST_CONFLICT", "同一请求不能使用不同参数")
+                raise BizError(409, "INVITATION_ALREADY_CREATED", "邀请已生成，链接仅首次显示；需要时请另行生成")
+            token, invitation_id, stamp = secrets.token_urlsafe(32), new_id(), now_ms()
+            expiry = stamp + hours * 3600000
+            connection.execute("INSERT INTO workspace_invitation (id,workspace_id,creator_id,invitation_hash,request_id,request_hash,is_collaborate,expire_time,create_time,update_time) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                               (db_id(invitation_id), db_id(workspace_id), db_id(user["id"]), digest(token), request_id,
+                                fingerprint, int(collaborate), expiry, stamp, stamp))
+            return {"id": invitation_id, "workspaceId": workspace_id, "collaborate": collaborate,
+                    "expireTime": expiry, "createTime": stamp, "isActive": True,
+                    "inviteUrl": self.config.public_origin + "/baba-share/invite.html#invite=" + token}
+
+    def invitation_delete(self, user, invitation_id):
+        with self.lock, self.repo.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT workspace_id FROM workspace_invitation WHERE id=?", (db_id(invitation_id),)).fetchone()
+            if row:
+                self.invitation_manager(connection, user["id"], str(uuid.UUID(bytes=row["workspace_id"])))
+                connection.execute("DELETE FROM workspace_invitation WHERE id=?", (db_id(invitation_id),))
+        return {}
+
+    def invitation_membership(self, user, body):
+        token = body.get("token")
+        require(isinstance(token, str) and re.fullmatch(r"[A-Za-z0-9_-]{43}", token),
+                404, "INVITATION_INVALID", "邀请不存在或已失效")
+        with self.lock, self.repo.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            actor = connection.execute("SELECT id,is_disabled FROM sys_user WHERE id=?", (db_id(user["id"]),)).fetchone()
+            require(actor and not actor["is_disabled"], 401, "AUTH_REQUIRED", "账号已失效")
+            row = connection.execute("SELECT workspace_id,creator_id,is_collaborate FROM workspace_invitation WHERE invitation_hash=? AND expire_time>?",
+                                     (digest(token), now_ms())).fetchone()
+            require(row, 404, "INVITATION_INVALID", "邀请不存在或已失效")
+            workspace_id = str(uuid.UUID(bytes=row["workspace_id"]))
+            try:
+                self.invitation_manager(connection, str(uuid.UUID(bytes=row["creator_id"])), workspace_id)
+            except BizError:
+                raise BizError(404, "INVITATION_INVALID", "邀请不存在或已失效") from None
+            workspace = connection.execute("SELECT owner_id FROM project_workspace WHERE id=?", (row["workspace_id"],)).fetchone()
+            if workspace["owner_id"] != actor["id"]:
+                stamp = now_ms()
+                connection.execute("INSERT INTO workspace_member (id,workspace_id,user_id,is_collaborate,create_time,update_time) VALUES (?,?,?,?,?,?) ON CONFLICT(workspace_id,user_id) DO NOTHING",
+                                   (db_id(new_id()), row["workspace_id"], actor["id"], row["is_collaborate"], stamp, stamp))
+            return {"workspaceId": workspace_id}
 
     def members(self, user, workspace_id):
         workspace, _, _ = self.access(user, workspace_id)
@@ -753,10 +832,12 @@ class Service:
         require(self.disk_path(workspace_id, path).is_dir(), 404, "FOLDER_NOT_EXIST", "目录不存在")
         hours = body.get("expireHours", 0)
         require(type(hours) is int and 0 <= hours <= 87600)
+        create_new = body.get("createNew", False)
+        require(type(create_new) is bool, msg="createNew必须为布尔值")
         with self.lock:
             existing = self.repo.one("SELECT " + SHARE_COLUMNS + " FROM folder_share WHERE owner_id=? AND workspace_id=? AND root_path=? AND (expire_time IS NULL OR expire_time>?) ORDER BY create_time DESC LIMIT 1",
                                      (db_id(user["id"]), db_id(workspace_id), path, now_ms()))
-            if existing and ((existing["expire_time"] is None and hours == 0) or
+            if not create_new and existing and ((existing["expire_time"] is None and hours == 0) or
                              (existing["expire_time"] is not None and existing["expire_time"] - existing["create_time"] == hours * 3600000)):
                 return self.share_view(existing)
             share_id, token, stamp = new_id(), secrets.token_urlsafe(32), now_ms()
@@ -772,7 +853,7 @@ class Service:
     def share_delete(self, user, share_id):
         share = self.repo.one("SELECT " + SHARE_COLUMNS + " FROM folder_share WHERE id=?", (db_id(share_id),))
         if share:
-            require(share["owner_id"] == user["id"] or user["user_role"] == "admin", 403, "PERMISSION_DENIED", "无权撤销分享")
+            require(share["owner_id"] == user["id"] or user["user_role"] == "admin", 403, "PERMISSION_DENIED", "无权删除分享")
             self.repo.execute("DELETE FROM folder_share WHERE id=?", (db_id(share_id),))
         return {}
 

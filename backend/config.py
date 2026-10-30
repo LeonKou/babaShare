@@ -28,7 +28,7 @@ def normalize_origin(value):
 @dataclass
 class Config:
     root: Path
-    host: str = "127.0.0.1"
+    host: str = "0.0.0.0"
     port: int = 8080
     public_origin: str = ""
     session_hours: int = 24
@@ -58,6 +58,12 @@ class Config:
         for path in (self.root, self.root / "data", self.root / "filedb"):
             if path.exists() and not path.is_dir():
                 raise ValueError(f"数据路径存在但不是目录：{path}")
+        legacy_database = self.root / "data" / "product-share.sqlite3"
+        if legacy_database.exists() or legacy_database.is_symlink():
+            raise ValueError(
+                f"发现旧数据库：{legacy_database}；请先备份整个数据目录并人工确认唯一数据库及配套filedb。"
+                "已拒绝启动，不会自动读取、迁移、删除旧库或新建空库。"
+            )
         try:
             (self.root / "data").mkdir(parents=True, exist_ok=True)
             (self.root / "filedb").mkdir(parents=True, exist_ok=True)
@@ -92,7 +98,7 @@ class Config:
             raise ValueError("BABA_SHARE_SECURE_COOKIE必须为0或1")
         return cls(
             root=Path(env("DATA_DIR", str(project_root))),
-            host=env("HOST", "127.0.0.1"), port=integer("PORT", "8080"),
+            host=env("HOST", "0.0.0.0"), port=integer("PORT", "8080"),
             public_origin=env("PUBLIC_ORIGIN", ""),
             session_hours=integer("SESSION_HOURS", "24"),
             ticket_seconds=integer("TICKET_SECONDS", "900"),

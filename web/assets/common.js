@@ -6,6 +6,7 @@
     users: "users.html",
     auth: "auth.html",
     shell: "index.html",
+    invite: "invite.html",
   };
   const $ = (s, p = document) => p.querySelector(s);
   function el(tag, attrs = {}, ...children) {
@@ -91,6 +92,9 @@
       });
       document.body.append(node);
     }
+    const dialogs = document.querySelectorAll("dialog[open]");
+    const host = dialogs[dialogs.length - 1] || document.fullscreenElement || document.body;
+    if (node.parentNode !== host) host.append(node);
     node.textContent = message;
     clearTimeout(node.dismiss);
     node.dismiss = setTimeout(() => (node.textContent = ""), 5000);
@@ -292,13 +296,16 @@
     ).result;
   }
   const errorMap = {
+    INVITATION_INVALID: "INVITATION_INVALID",
+    INVITATION_ALREADY_CREATED: "INVITATION_ALREADY_CREATED",
+    REQUEST_CONFLICT: "REQUEST_CONFLICT",
     RESOURCE_CONFLICT: "conflict",
     USER_EXISTS: "conflict",
     PATH_CONFLICT: "conflict",
     PATH_CASE_CONFLICT: "conflict",
     FOREIGN_CONTENT: "permissionDenied",
     READ_ONLY: "permissionDenied",
-    ORIGIN_DENIED: "permissionDenied",
+    ORIGIN_DENIED: "originDenied",
     UNSAFE_PATH: "invalidFile",
     PATH_KIND_INVALID: "invalidInput",
     FOLDER_NOT_EXIST: "notFound",
@@ -351,7 +358,33 @@
     if (e?.name === "TypeError") return I18n.t("networkError");
     return I18n.t(errorMap[e?.status] || "unknownError");
   }
-  async function api(path, { method = "GET", query = {}, body, signal } = {}) {
+  let sessionNavigation = null;
+  function sessionExpired() {
+    if (sessionNavigation) return sessionNavigation;
+    const protectedPage =
+      new URL(".", routeUrl("shell")).pathname === location.pathname ||
+      ["shell", "workspace", "account", "users"].some(
+        (routeId) => new URL(routeUrl(routeId)).pathname === location.pathname,
+      );
+    if (!protectedPage) return Promise.resolve(false);
+    sessionNavigation = Promise.resolve().then(async () => {
+      if (window.AppPage) {
+        window.AppPage.setDirty(false);
+        try {
+          return await window.AppPage.request("shell.sessionExpired", {});
+        } catch (e) {
+          console.warn("Session navigation failed", e);
+        }
+      }
+      location.replace(routeUrl("auth"));
+      return true;
+    });
+    return sessionNavigation;
+  }
+  async function api(
+    path,
+    { method = "GET", query = {}, body, signal, authRequired = false } = {},
+  ) {
     const url = new URL(path, location.href);
     for (const [key, value] of Object.entries(query))
       if (value !== undefined && value !== null)
@@ -382,9 +415,27 @@
       const e = new Error(data.status);
       e.status = data.status;
       e.httpStatus = response.status;
+      if (authRequired && response.status === 401) await sessionExpired();
       throw e;
     }
     return data;
+  }
+  function invitationToken() {
+    const fragment = location.hash || "";
+    const match = /^#invite=([A-Za-z0-9_-]{43})$/.exec(fragment);
+    if (fragment) {
+      const clean = new URL(location.href);
+      clean.hash = "";
+      history.replaceState(history.state, "", clean);
+    }
+    return match ? match[1] : null;
+  }
+  function invitationUrl(routeId, token) {
+    if (!["invite", "auth"].includes(routeId) || !/^[A-Za-z0-9_-]{43}$/.test(token))
+      throw new Error("ROUTE_NOT_ALLOWED");
+    const url = new URL(routeUrl(routeId));
+    url.hash = "invite=" + token;
+    return url.href;
   }
   function routeUrl(routeId, params = {}) {
     if (!Object.hasOwn(routes, routeId)) throw new Error("ROUTE_NOT_ALLOWED");
@@ -404,7 +455,10 @@
     return base.href;
   }
   function settingsControls(container) {
-    const select = el("select", { "aria-label": I18n.t("language") });
+    const select = el("select", {
+      "aria-label": I18n.t("language"),
+      "data-i18n-label": "language",
+    });
     for (const [value, label] of [
       ["zh-CN", "简体中文"],
       ["en-US", "English"],
@@ -433,8 +487,24 @@
       });
       I18n.persist();
     });
-    container.append(select, theme);
-    I18n.subscribe((ctx) => (select.value = ctx.locale));
+    const accent = el("select", {
+      "aria-label": I18n.t("accent"),
+      "data-i18n-label": "accent",
+    });
+    for (const value of I18n.accents) {
+      const key = "accent" + value[0].toUpperCase() + value.slice(1);
+      accent.append(el("option", { value, "data-i18n": key, text: I18n.t(key) }));
+    }
+    accent.value = I18n.ctx.accent;
+    accent.addEventListener("change", () => {
+      I18n.apply({ ...I18n.ctx, accent: accent.value });
+      I18n.persist();
+    });
+    container.append(select, accent, theme);
+    I18n.subscribe((ctx) => {
+      select.value = ctx.locale;
+      accent.value = ctx.accent;
+    });
   }
   function page() {
     const adapter = {
@@ -446,6 +516,10 @@
           document.title = `${payload.title} · babaShare`;
       },
       async request(type, payload) {
+        if (type === "shell.sessionExpired") {
+          location.replace(routeUrl("auth"));
+          return true;
+        }
         if (type === "shell.confirm") return confirmDialog(payload.message);
         if (type === "shell.navigate") {
           if (
@@ -473,7 +547,12 @@
       if (!bridge.embedded) {
         const controls = el("div", { class: "standalone-controls" });
         controls.append(
-          el("a", { href: routeUrl("shell"), text: "babaShare" }),
+          el("a", { href: routeUrl("shell"), text: "babaShare", onclick: (event) => {
+            if (event.button > 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+            event.preventDefault();
+            return bridge.request("shell.navigate", { routeId: "shell", params: {} })
+              .catch((error) => toast(errorText(error)));
+          } }),
         );
         settingsControls(controls);
         document.body.prepend(controls);
@@ -570,30 +649,77 @@
       ? I18n.t("invalidName")
       : "";
   }
-  async function copy(text) {
+  function copyButton(key, action, cls = "", iconName, { errorMessage = errorText, isDisabled = () => false } = {}) {
+    let busy = false, resetTimer;
+    const control = button(key, async () => {
+      if (busy || control.disabled) return;
+      busy = true;
+      clearTimeout(resetTimer);
+      const show = (state, label) => {
+        control.dataset.copyState = state;
+        control.setAttribute("data-i18n-label", label);
+        control.setAttribute("aria-label", I18n.t(label));
+        feedback.setAttribute("data-i18n", label);
+        feedback.textContent = I18n.t(label);
+      };
+      show("loading", "copying");
+      control.disabled = true;
+      control.setAttribute("aria-busy", "true");
+      let copied = false;
+      try { copied = await action() !== false; }
+      catch (error) { toast(errorMessage(error)); }
+      finally {
+        busy = false;
+        control.disabled = isDisabled();
+        control.setAttribute("aria-busy", "false");
+        show(copied ? "success" : "failure", copied ? "copySuccess" : "copyRetry");
+        resetTimer = setTimeout(() => {
+          delete control.dataset.copyState;
+          control.setAttribute("data-i18n-label", key);
+          control.setAttribute("aria-label", I18n.t(key));
+        }, 2500);
+      }
+    }, cls, iconName);
+    const label = el("span", { class: "copy-label" });
+    label.append(...Array.from(control.childNodes));
+    if (!iconName) label.setAttribute("data-i18n", key);
+    const feedback = el("span", { class: "copy-result", "aria-hidden": "true" });
+    const reserve = el("span", { class: "copy-reserve", "data-i18n": "copyRetry",
+      "aria-hidden": "true", text: I18n.t("copyRetry") });
+    control.replaceChildren(label, feedback, reserve);
+    control.removeAttribute("data-i18n");
+    control.setAttribute("data-i18n-label", key);
+    control.classList.add("copy-feedback");
+    return control;
+  }
+  async function copy(text, { successKey = "copied", titleKey = "copyLink", manualKey = "copyManual", multiline = false } = {}) {
     try {
       await navigator.clipboard.writeText(text);
-      toast(I18n.t("copied"));
-    } catch (e) {
-      await dialog(I18n.t("copyLink"), (node, close) => {
-        const input = el("input", {
-          value: text,
-          readonly: "",
-          "aria-label": I18n.t("link"),
+      toast(I18n.t(successKey));
+      return true;
+    } catch (error) {
+      const fallback = dialog(I18n.t(titleKey), (node, close) => {
+        const input = el(multiline ? "textarea" : "input", {
+          readonly: "", dir: "ltr", autocomplete: "off", spellcheck: "false",
+          "aria-label": I18n.t(titleKey),
         });
+        input.value = text;
         node.append(
-          el("p", { class: "form-note", text: I18n.t("copyManual") }),
+          el("p", { class: "form-note", text: I18n.t(manualKey) }),
           input,
-          el(
-            "div",
-            { class: "actions" },
-            button("close", () => close(null)),
-          ),
+          el("div", { class: "actions" }, button("close", () => close(null))),
         );
+        node.addEventListener("close", () => { input.value = ""; }, { once: true });
         input.addEventListener("focus", () => input.select());
-        queueMicrotask(() => input.select());
-      }).result;
-    }
+        queueMicrotask(() => { input.focus(); input.select(); });
+      }, { wide: multiline });
+      toast(I18n.t("copyFailed"));
+      const cleanup = () => fallback.close(null);
+      window.addEventListener("pagehide", cleanup, { once: true });
+      try { await fallback.result; }
+      finally { window.removeEventListener("pagehide", cleanup); }
+      return false;
+    } finally { text = ""; }
   }
   window.UI = {
     $,
@@ -608,7 +734,10 @@
     formDialog,
     errorText,
     api,
+    sessionExpired,
     routeUrl,
+    invitationToken,
+    invitationUrl,
     settingsControls,
     page,
     date,
@@ -617,5 +746,6 @@
     preview,
     nameValidator,
     copy,
+    copyButton,
   };
 })();

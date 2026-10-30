@@ -13,7 +13,7 @@
         );
         link.handle("bridge.hello", () => {
           connected = true;
-          return context();
+          return I18n.normalizeContext(context());
         });
         for (const [type, fn] of Object.entries(handlers))
           link.handle(type, fn);
@@ -22,7 +22,8 @@
       iframe.addEventListener("load", bind);
       const host = {
         emit(type, payload) {
-          if (connected) link.emit(type, payload);
+          if (connected)
+            link.emit(type, type === "context.changed" ? I18n.normalizeContext(payload) : payload);
         },
         request(type, payload) {
           return connected

@@ -49,6 +49,7 @@
       },
       "shell.confirm": (payload) => UI.confirm(payload.message),
       "shell.navigate": navigate,
+      "shell.sessionExpired": () => UI.sessionExpired(),
       "shell.title": (payload) => {
         document.title = `${payload.title} · babaShare`;
         return true;
@@ -60,6 +61,11 @@
         return true;
       },
     },
+  });
+  $("#brand-home").addEventListener("click", (event) => {
+    if (event.button > 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    return navigate({ routeId: "workspace", params: {} });
   });
   function navItem(key, routeId, params = {}, workspace) {
     const b = el(
@@ -143,10 +149,18 @@
   $("#logout").addEventListener("click", async () => {
     try {
       if (!(await host.request("page.beforeLeave", {}))) return;
-      await API("session", { method: "DELETE" });
-      location.href = UI.routeUrl("auth");
     } catch (e) {
       toast(errorText(e));
+      return;
+    }
+    let failed = false;
+    try {
+      await API("session", { method: "DELETE" });
+    } catch (e) {
+      failed = e.httpStatus !== 401;
+      if (failed) toast(errorText(e));
+    } finally {
+      location.replace(UI.routeUrl("auth", failed ? { logout: "failed" } : {}));
     }
   });
   I18n.apply(I18n.ctx);
@@ -174,10 +188,7 @@
       true,
     );
   } catch (e) {
-    if (e.httpStatus === 401) {
-      location.href = UI.routeUrl("auth");
-      return;
-    }
+    if (e.httpStatus === 401) return;
     toast(errorText(e));
     renderNav();
   }

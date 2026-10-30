@@ -2,6 +2,47 @@
   "use strict";
   const { $, el, button, toast, errorText } = UI;
   const bridge = UI.page();
+  const sections = ["profile", "keys", "shares"];
+  const tabs = sections.map((section) => $("#account-tab-" + section));
+  const panels = sections.map((section) => $("#account-panel-" + section));
+  function selectTab(section, { focus = false, persist = false } = {}) {
+    const selected = sections.includes(section) ? section : "profile";
+    sections.forEach((name, index) => {
+      const active = name === selected;
+      tabs[index].setAttribute("aria-selected", String(active));
+      tabs[index].setAttribute("tabindex", active ? "0" : "-1");
+      panels[index].hidden = !active;
+      if (active && focus) tabs[index].focus();
+    });
+    if (persist) {
+      const url = new URL(location.href);
+      url.searchParams.set("accountTab", selected);
+      history.replaceState(history.state, "", url);
+    }
+  }
+  tabs.forEach((tab, index) => {
+    tab.addEventListener("click", () => selectTab(sections[index], { persist: true }));
+    tab.addEventListener("keydown", (event) => {
+      let next;
+      const direction = { ltr: 1, rtl: -1 }[I18n.ctx.dir];
+      if (event.key === "ArrowRight") next = (index + direction + tabs.length) % tabs.length;
+      else if (event.key === "ArrowLeft") next = (index - direction + tabs.length) % tabs.length;
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = tabs.length - 1;
+      else return;
+      event.preventDefault();
+      selectTab(sections[next], { focus: true, persist: true });
+    });
+  });
+  const readTab = () => new URL(location.href).searchParams.get("accountTab");
+  selectTab(readTab());
+  window.addEventListener("popstate", () => {
+    const section = readTab();
+    const selected = sections.includes(section) ? section : "profile";
+    const focus = document.activeElement && (tabs.includes(document.activeElement) ||
+      panels.some((panel, index) => sections[index] !== selected && panel.contains(document.activeElement)));
+    selectTab(selected, { focus });
+  });
   let me = null,
     shares = [],
     workspaces = [],
@@ -18,7 +59,7 @@
         el(
           "div",
           {},
-          el("h2", { text: me.nickname }),
+          el("h3", { text: me.nickname }),
           el("p", { class: "muted small", text: me.userName }),
           el(
             "div",
@@ -52,7 +93,7 @@
           el(
             "header",
             {},
-            el("h2", {}, link),
+            el("h3", {}, link),
             el("span", {
               class: "badge",
               text: I18n.t(expired ? "expired" : "active"),
@@ -76,8 +117,8 @@
           el(
             "footer",
             {},
-            button("copyLink", () => UI.copy(share.shareUrl), "", "link"),
-            button("revoke", () => revoke(share), "danger"),
+            UI.copyButton("copyLink", () => UI.copy(share.shareUrl), "", "link"),
+            button("delete", () => deleteShare(share), "danger"),
           ),
         );
       }),
@@ -87,8 +128,8 @@
       $("#share-empty").replaceChildren(UI.empty("noShares", "noSharesHint"));
     document.title = `${I18n.t("account")} · babaShare`;
   }
-  async function revoke(share) {
-    if (!(await UI.confirm(I18n.t("revokeConfirm")))) return;
+  async function deleteShare(share) {
+    if (!(await UI.confirm(I18n.t("shareDeleteConfirm")))) return;
     try {
       await API("share", { method: "DELETE", query: { id: share.id } });
       shares = shares.filter((s) => s.id !== share.id);
@@ -102,7 +143,9 @@
     controller?.abort();
     controller = new AbortController();
     const current = ++requestId;
+    $("#account-status").classList.remove("error");
     $("#account-status").textContent = I18n.t("loading");
+    $("#profile-summary").setAttribute("aria-busy", "true");
     $("#share-cards").setAttribute("aria-busy", "true");
     pager.busy(true);
     try {
@@ -123,6 +166,7 @@
     } finally {
       if (current === requestId) {
         pager.busy(false);
+        $("#profile-summary").setAttribute("aria-busy", "false");
         $("#share-cards").setAttribute("aria-busy", "false");
       }
     }
@@ -185,15 +229,13 @@
     const selected = keys.filter((key) => filter === "all" || keyState(key) === filter);
     $("#mcp-cards").replaceChildren(...keyPager.slice(selected).map((key) => {
       const status = keyState(key);
-      const revokeButton = button("mcpRevoke", () => revokeKey(key), "danger");
-      revokeButton.disabled = keyBusy;
-      const copyButton = button("mcpCopyUse", async () => {
-        if (keyBusy || keyState(key) !== "active") { renderKeys(); return; }
-        copyButton.disabled = true;
-        try { await McpHelp.copyUse(key.id); }
-        catch (error) { toast(keyError(error)); }
-        finally { copyButton.disabled = keyBusy || keyState(key) !== "active"; }
-      }, "primary");
+      const deleteButton = button("delete", () => deleteKey(key), "danger");
+      deleteButton.disabled = keyBusy;
+      const copyButton = UI.copyButton("mcpCopyUse", () => {
+        if (keyBusy || keyState(key) !== "active") return false;
+        return McpHelp.copyUse(key.id);
+      }, "primary", null, { errorMessage: keyError,
+        isDisabled: () => keyBusy || keyState(key) !== "active" });
       copyButton.disabled = keyBusy || status !== "active";
       copyButton.setAttribute("aria-describedby", "mcp-privacy-" + key.id);
       return el("article", { class: "card" },
@@ -208,7 +250,7 @@
           el("bdi", { class: "num", dir: "ltr", text: UI.date(key.revokedTime) })) : null,
         el("p", { id: "mcp-privacy-" + key.id, class: "form-note", text: I18n.t("mcpCopyPrivacy") }),
         status !== "active" ? el("p", { class: "form-note", text: I18n.t("MCP_KEY_INACTIVE") }) : null,
-        el("footer", {}, status !== "revoked" ? revokeButton : null, copyButton),
+        el("footer", {}, deleteButton, copyButton),
       );
     }));
     $("#mcp-empty").hidden = selected.length > 0 || !keysLoaded;
@@ -244,12 +286,14 @@
       }
     }
   }
-  async function revokeKey(key) {
-    if (keyBusy || !(await UI.confirm(I18n.t("mcpRevokeConfirm", { name: key.keyName })))) return;
+  async function deleteKey(key) {
+    if (keyBusy || !(await UI.confirm(I18n.t("mcpDeleteConfirm", { name: key.keyName })))) return;
     keyBusy = true;
     renderKeys();
     try {
       await API("mcpKey", { method: "DELETE", query: { id: key.id } });
+      keys = keys.filter((item) => item.id !== key.id);
+      renderKeys();
       await loadKeys();
       toast(I18n.t("success"));
     } catch (error) {

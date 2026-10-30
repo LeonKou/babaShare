@@ -1,6 +1,7 @@
 # Runtime data and user-uploaded prototypes
 /data/
 /filedb/
+/backups/
 .env
 
 # Python runtime
