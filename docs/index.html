@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN" dir="ltr" data-mode="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>babaShare — 让原型，从你电脑走到团队面前。</title>
+  <meta name="description" content="babaShare 是轻量、自托管的 HTML 原型协作与分享平台。保留目录与资源，邀请团队成员，在线预览，创建限时可撤销分享，并通过 MCP 从 AI 编程工具直接推送原型。">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="zh_CN">
+  <meta property="og:site_name" content="babaShare">
+  <meta property="og:title" content="babaShare — 让原型，从你电脑走到团队面前。">
+  <meta property="og:description" content="上传完整 HTML 原型，在自己的服务上协作、预览与分享。支持目录资源、三种角色、限时分享及 19 个 MCP 工具。">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="babaShare — HTML 原型协作与分享">
+  <meta name="twitter:description" content="把电脑里的 HTML 原型，交到团队面前。轻量、自托管，无需编译。">
+  <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./assets/tokens.css">
+  <link rel="stylesheet" href="./assets/components.css">
+  <link rel="stylesheet" href="./assets/layout.css">
+  <script>
+    try {
+      const saved = JSON.parse(localStorage.getItem('babaShare.site.context') || 'null');
+      const directions = { 'zh-CN': 'ltr', 'en-US': 'ltr', 'ar-SA': 'rtl' };
+      if (saved && Object.hasOwn(directions, saved.locale) && ['light', 'dark'].includes(saved.theme)) {
+        document.documentElement.lang = saved.locale;
+        document.documentElement.dir = directions[saved.locale];
+        document.documentElement.dataset.mode = saved.theme;
+      }
+    } catch (error) { console.warn('babaShare: 使用默认显示设置。', error.name); }
+  </script>
+  <script src="./assets/messages.js" defer></script>
+  <script src="./assets/site.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main" data-i18n="skip">跳到正文</a>
+  <header class="site-header">
+    <a class="brand" href="#" aria-label="babaShare 首页" data-i18n-aria="brandLabel"><span class="brand-mark" aria-hidden="true">b/</span><bdi dir="ltr">babaShare</bdi></a>
+    <nav class="main-nav" id="navigation" aria-label="页面导航" data-i18n-aria="navLabel">
+      <a href="#workflow" data-i18n="navWorkflow">如何工作</a>
+      <a href="#collaboration" data-i18n="navCollab">团队协作</a>
+      <a href="#mcp" dir="ltr">MCP</a>
+      <a href="#deploy" data-i18n="navDeploy">部署</a>
+    </nav>
+    <div class="header-tools">
+      <label class="sr-only" for="locale" data-i18n="language">语言</label>
+      <select id="locale" aria-label="语言" data-i18n-aria="language">
+        <option value="zh-CN" lang="zh-CN">中文</option>
+        <option value="en-US" lang="en-US">English</option>
+        <option value="ar-SA" lang="ar-SA">العربية</option>
+      </select>
+      <button class="icon-button" id="theme" type="button" aria-label="切换为深色主题" data-i18n-aria="themeDark"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 15A8.5 8.5 0 0 1 9 4a8.5 8.5 0 1 0 11 11Z"/></svg></button>
+      <button class="icon-button mobile-menu" id="menu" type="button" aria-label="展开页面导航" aria-expanded="false" aria-controls="navigation" data-i18n-aria="menuOpen"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    </div>
+  </header>
+  <main id="main" tabindex="-1">
+    <section class="hero page-width" aria-labelledby="hero-title">
+      <div class="hero-content">
+        <p class="eyebrow" data-i18n="heroEyebrow">HTML 原型 / 自托管 / 团队协作</p>
+        <h1 id="hero-title"><span class="headline-main" data-i18n="heroA">让原型，</span><br><span class="headline-main" data-i18n="heroB">从你电脑</span><br><span class="headline-accent" data-i18n="heroC">走到团队面前。</span></h1>
+        <p class="hero-copy" data-i18n="heroCopy">不再来回传压缩包。把 HTML、样式和图片放进同一个工作区，让团队打开链接，就能看到你想表达的交互。</p>
+        <div class="hero-actions">
+          <a class="button button-secondary" href="https://github.com/LeonKou/babaShare" data-i18n="repoCta">查看 GitHub 仓库 ↗</a>
+          <a class="button button-primary" href="#deploy" data-i18n="deployCta">部署你的 babaShare →</a>
+        </div>
+        <p class="micro-note" data-i18n="heroNote">运行在你自己的服务上。原型与协作，由你掌握。</p>
+      </div>
+      <div class="hero-visual">
+        <div class="visual-caption"><span class="caption-rule" aria-hidden="true"></span><span data-i18n="visualCaption">从一组文件，到一个共同语境</span><span class="num" aria-hidden="true">01 / 03</span></div>
+        <div class="product-frame" aria-label="交互式产品示意" data-i18n-aria="demoLabel">
+          <div class="frame-top"><strong dir="ltr">babaShare / studio</strong><span class="frame-label" data-i18n="workspaceLabel">品牌网站 · 工作区</span></div>
+          <div class="demo-banner" data-i18n="demoBanner">交互示意 · 全部为本地演示数据，无上传、无真实分享服务</div>
+          <div class="workspace">
+            <div class="file-pane">
+              <h2 class="file-heading" data-i18n="files">原型文件</h2>
+              <ul class="tree">
+                <li><details open><summary><span class="file-icon" aria-hidden="true">▱</span><bdi dir="ltr">website/</bdi></summary>
+                  <ul class="tree indent">
+                    <li><button type="button" data-file="index" aria-current="true"><span class="file-icon" aria-hidden="true">↳</span><bdi dir="ltr">index.html</bdi></button></li>
+                    <li><button type="button" data-file="about"><span class="file-icon" aria-hidden="true">↳</span><bdi dir="ltr">about.html</bdi></button></li>
+                    <li><details open><summary><span class="file-icon" aria-hidden="true">▱</span><bdi dir="ltr">assets/</bdi></summary><ul class="tree indent"><li><button type="button" data-file="style"><bdi dir="ltr">style.css</bdi></button></li><li><span class="static-file" dir="ltr">cover.svg</span></li></ul></details></li>
+                  </ul>
+                </details></li>
+              </ul>
+              <p class="tree-note" data-i18n="treeNote">试着选择文件，预览随之切换。</p>
+            </div>
+            <div class="preview">
+              <div class="preview-toolbar"><bdi id="preview-path" dir="ltr">index.html</bdi><span data-i18n="previewLabel">预览示意</span></div>
+              <div class="preview-canvas" id="prototype-preview">
+                <div class="mini-app" id="mini-page">
+                  <div class="mini-app-top" dir="ltr">FORM / STUDIO <span class="mini-top-end">↗</span></div>
+                  <div class="mini-app-body"><p class="mini-overline" data-i18n="miniOverline">为想法，留出空间。</p><h3 id="mini-title" data-i18n="miniTitle">下一次灵感，<br>从这里开始。</h3><div class="mini-lines" aria-hidden="true"><i></i><i></i><i></i></div><span class="mini-link" id="mini-label" data-i18n="miniLabel">一份可以被看见的想法</span></div>
+                </div>
+                <pre id="style-preview" class="code-preview" hidden dir="ltr">.prototype {
+  display: grid;
+  gap: 24px;
+}
+
+/* 相对路径，资源随行 */</pre>
+              </div>
+            </div>
+          </div>
+          <div class="demo-bottom"><span data-i18n="shareLabel">分享控制示意</span><button type="button" class="demo-share" id="share-toggle" aria-expanded="false" aria-controls="share-panel" data-i18n="shareOpen">查看分享设置 →</button></div>
+          <div class="share-panel" id="share-panel" hidden><div><strong id="share-state" data-i18n="shareActive">演示状态：有效</strong><p id="share-explanation" data-i18n="shareExpiry">示例有效期：24 小时。未生成真实链接。</p></div><button type="button" id="revoke-share" class="button button-secondary" data-i18n="revoke">模拟撤销</button></div>
+        </div>
+        <div class="visual-foot"><span data-i18n="visualFoot">目录结构保留，想法完整抵达。</span><a href="#workflow" data-i18n="visualLink">了解工作流 ↓</a></div>
+        <p id="demo-status" class="sr-only" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+    <div class="fact-strip page-width" aria-label="产品特性" data-i18n-aria="factsLabel"><span data-i18n="fact1">完整目录与相对资源</span><span data-i18n="fact2">管理员 / 编辑者 / 查看者</span><span data-i18n="fact3">限时 · 永久 · 随时撤销</span><span data-i18n="fact4">19 个 MCP 工具</span></div>
+    <section class="section page-width" id="workflow" aria-labelledby="workflow-title">
+      <div class="section-head"><div><p class="eyebrow" data-i18n="workflowEyebrow">01 / 从本地到团队</p><h2 id="workflow-title" data-i18n="workflowTitle">想法不该，<br>停在你的桌面。</h2></div><p class="section-intro" data-i18n="workflowIntro">从能打开的 HTML，到能一起讨论的原型。三个步骤，让下一轮沟通从同一个画面开始。</p></div>
+      <div class="workflow">
+        <article class="step"><span class="step-num num">01</span><h3 data-i18n="step1Title">把原型放进来</h3><p data-i18n="step1Copy">创建工作区，批量上传 HTML、CSS、JavaScript 和图片。保留目录结构与相对资源引用。</p><div class="step-diagram" aria-hidden="true"><span dir="ltr">HTML</span><span dir="ltr">CSS</span><span dir="ltr">JS</span><span>↗</span></div></article>
+        <article class="step"><span class="step-num num">02</span><h3 data-i18n="step2Title">让团队看见它</h3><p data-i18n="step2Copy">邀请已有账号，分配适合的权限。在工作区直接预览，编辑者可在权限范围内更新原型。</p><div class="step-diagram" aria-hidden="true"><span>01</span><span>02</span><span>03</span><span>↔</span></div></article>
+        <article class="step"><span class="step-num num">03</span><h3 data-i18n="step3Title">把链接分享出去</h3><p data-i18n="step3Copy">按目录生成分享链接，选择有效期或永久有效。接收方查看目录和预览，你随时可以撤销。</p><div class="step-diagram" aria-hidden="true"><span dir="ltr">/s/…</span><span>→</span><span>↗</span></div></article>
+      </div>
+    </section>
+    <section class="section page-width" id="collaboration" aria-labelledby="collab-title">
+      <div class="section-head"><div><p class="eyebrow" data-i18n="collabEyebrow">02 / 协作，有清晰的边界</p><h2 id="collab-title" data-i18n="collabTitle">同一个工作区，<br>各自合适的位置。</h2></div><p class="section-intro" data-i18n="collabIntro">让需要动手的人编辑，让需要了解的人查看。把文件、成员和访问控制放在同一个地方。</p></div>
+      <div class="collab-grid">
+        <article class="collab-item"><h3 data-i18n="rolesTitle">三种角色，权限清楚</h3><p data-i18n="rolesCopy">权限实时生效，MCP 同样遵循账号权限。工作区协作设置不会让查看者获得编辑能力。</p><div class="role-line"><div class="role"><strong data-i18n="admin">管理员</strong><span data-i18n="adminCopy">管理账号与全部工作区</span></div><div class="role"><strong data-i18n="editor">编辑者</strong><span data-i18n="editorCopy">在授权范围内创建、修改</span></div><div class="role"><strong data-i18n="viewer">查看者</strong><span data-i18n="viewerCopy">只读查看有权访问的内容</span></div></div></article>
+        <article class="collab-item"><h3 data-i18n="controlTitle">分享出去，也能收回来</h3><p data-i18n="controlCopy">目录分享支持限时或永久有效，也支持随时撤销。分享链接本身就是访问凭据，请只交给合适的人。</p><p class="editorial-detail" data-i18n="controlDetail">有期限的讨论，不必留下无限期的入口。</p></article>
+        <article class="collab-item"><h3 data-i18n="resourcesTitle">页面之外，资源一起到位</h3><p data-i18n="resourcesCopy">多级目录、批量上传、搜索和在线 UTF-8 编辑，照顾完整原型的日常管理。同名冲突可覆盖、保留两份或取消。</p></article>
+        <article class="collab-item"><h3 data-i18n="previewTitle">为静态原型而设计</h3><p data-i18n="previewCopy">目录入口优先匹配 index.html，其次 home.html。受控沙箱预览支持脚本，但部分联网、存储和窗口能力受限。</p></article>
+      </div>
+    </section>
+    <section class="section page-width" id="mcp" aria-labelledby="mcp-title">
+      <div class="section-head"><div><p class="eyebrow" data-i18n="mcpEyebrow">03 / 从生成，到分享</p><h2 id="mcp-title" data-i18n="mcpTitle">AI 写好原型，<br>接着交付给团队。</h2></div><p class="section-intro" data-i18n="mcpIntro">通过 MCP，让 Codex、OpenCode 等 AI 编程工具直接连接你的 babaShare，减少下载、打包、再上传的来回。</p></div>
+      <div class="mcp-block"><div><span class="mcp-count num">19</span><h3 data-i18n="mcpToolsTitle">个工具，衔接你的工作流</h3><p data-i18n="mcpToolsCopy">覆盖工作区、文件、成员与分享。继承实时权限，不开放账号管理、密钥管理或安全设置工具。</p><a class="text-link" href="https://github.com/LeonKou/babaShare/blob/HEAD/MCP-README.md" data-i18n="mcpGuide">阅读 MCP 接入指南 ↗</a></div><div class="mcp-sequence"><ol><li><span data-i18n="mcpStep1">在个人中心创建 MCP Key，点击「复制使用」。</span></li><li><span data-i18n="mcpStep2">将配置指南交给可信客户端，用列出工作区验证连接。</span></li><li><span data-i18n="mcpStep3">按你的指令上传原型，再创建所需的分享。</span></li></ol><div class="protocol-note"><span dir="ltr">Streamable HTTP + Bearer Key</span><p data-i18n="keyNote">配置含私密密钥，只交给可信客户端，不要贴进公开聊天或源码。</p></div></div></div>
+    </section>
+    <section class="section page-width" id="deploy" aria-labelledby="deploy-title">
+      <div class="section-head"><div><p class="eyebrow" data-i18n="deployEyebrow">04 / 轻装部署</p><h2 id="deploy-title" data-i18n="deployTitle">一个服务，<br>就能开始协作。</h2></div><p class="section-intro" data-i18n="deployIntro">Python 3.12+ 标准库、SQLite 和原生前端。无需 pip / npm 安装，无需编译；页面、API、MCP 与预览共用一个 HTTP 端口。</p></div>
+      <div class="deploy-layout"><div class="deploy-context"><h3 data-i18n="deployContextTitle">从项目根目录开始</h3><p data-i18n="deployContextCopy">先获取仓库代码，再按实际环境选择启动方式。仓库当前为私有，访问代码和文档需要相应权限。</p><a class="text-link" href="https://github.com/LeonKou/babaShare/blob/HEAD/DEPLOYMENT.md" data-i18n="deployGuide">阅读完整部署手册 ↗</a><p class="micro-note" data-i18n="deploySafety">在受控网络完成首位管理员初始化。公网部署前配置 HTTPS 与访问策略；备份时保留整个数据根。</p></div><div class="deploy-code"><div class="deploy-tabs" role="tablist" aria-label="选择部署方式" data-i18n-aria="deployTabs"><button type="button" class="deploy-tab" id="tab-python" role="tab" aria-selected="true" aria-controls="panel-python" tabindex="0">Python</button><button type="button" class="deploy-tab" id="tab-docker" role="tab" aria-selected="false" aria-controls="panel-docker" tabindex="-1">Docker Compose</button></div><div class="deploy-panel" id="panel-python" role="tabpanel" aria-labelledby="tab-python" tabindex="0"><pre><code id="code-python" dir="ltr">python --version
+python server.py</code></pre><p class="micro-note" data-i18n="pythonNote">需要 Python 3.12+（含 sqlite3）。Linux 可使用 python3。前台命令不代替系统服务。</p><div class="copy-row"><button class="button button-secondary copy-command" type="button" data-copy="code-python" data-i18n="copy">复制命令</button></div></div><div class="deploy-panel" id="panel-docker" role="tabpanel" aria-labelledby="tab-docker" tabindex="0" hidden><pre><code id="code-docker" dir="ltr">docker compose config
+docker compose build
+docker compose up -d
+docker compose ps
+docker compose logs --tail=100</code></pre><p class="micro-note" data-i18n="dockerNote">需要 Docker Compose。持久化整个数据根，不仅是 filedb 或单个数据库文件。</p><div class="copy-row"><button class="button button-secondary copy-command" type="button" data-copy="code-docker" data-i18n="copy">复制命令</button></div></div><p class="run-address"><span data-i18n="visit">启动后访问</span> <code dir="ltr">http://127.0.0.1:8080/baba-share/</code></p><p id="copy-status" class="micro-note" role="status" aria-live="polite"></p><noscript><p>Docker Compose 命令：<code>docker compose config → docker compose build → docker compose up -d → docker compose ps → docker compose logs --tail=100</code>。可在完整部署手册中阅读并手动复制。</p></noscript></div></div>
+    </section>
+    <section class="section page-width" id="faq" aria-labelledby="faq-title">
+      <div class="section-head"><div><p class="eyebrow" data-i18n="faqEyebrow">05 / 开始之前</p><h2 id="faq-title" data-i18n="faqTitle">你可能还想知道。</h2></div><p class="section-intro" data-i18n="faqIntro">把边界讲清楚，才好放心放进工作流。</p></div>
+      <div class="faq-list">
+        <details><summary data-i18n="faq1Q">这里可以直接上传或在线试用吗？</summary><p data-i18n="faq1A">这里是静态产品官网。上方窗口仅使用本地演示数据，没有上传、登录或真实分享服务。实际使用需要先部署 babaShare，并在自己的实例上创建账号。</p></details>
+        <details><summary data-i18n="faq2Q">能保留完整原型的目录结构吗？</summary><p data-i18n="faq2A">可以管理多级目录并上传 HTML、CSS、JavaScript 和图片，请保留相对资源引用。根绝对路径不会自动改写；保留两份同名文件也不会改写 HTML 引用。</p></details>
+        <details><summary data-i18n="faq3Q">可以托管带后端的应用吗？</summary><p data-i18n="faq3A">产品面向静态 HTML 原型，上传的 PHP、Python 或 Node.js 服务端脚本不会执行。依赖联网 API、登录态、持久存储、表单或弹窗的原型，可能受预览沙箱限制。</p></details>
+        <details><summary data-i18n="faq4Q">编辑者和查看者有什么区别？</summary><p data-i18n="faq4A">编辑者可创建工作区，并在工作区及文件归属权限范围内修改内容；查看者始终只读。成员协作设置不会越过账号角色边界，MCP 也继承这些实时权限。</p></details>
+        <details><summary data-i18n="faq5Q">数据放在哪里？如何备份？</summary><p data-i18n="faq5A">数据保存在你指定的本地数据根，包括 SQLite、上传文件和存在时的 MCP 主密钥。优先停止服务后成套备份整个根目录，不要只拷贝运行中的数据库主文件。</p></details>
+        <details><summary data-i18n="faq6Q">为什么 GitHub 链接需要授权？</summary><p data-i18n="faq6A">当前仓库为私有，查看代码、部署手册和 MCP 文档需要对应的 GitHub 仓库权限。本页不承诺开放下载，也不声明开源许可证。</p></details>
+      </div>
+    </section>
+    <section class="closing page-width" aria-labelledby="closing-title"><p class="eyebrow" data-i18n="closingEyebrow">NEXT / 把想法交出去</p><h2 id="closing-title" data-i18n="closingTitle">让下一次讨论，<br>从打开原型开始。</h2><a class="button button-primary" href="#deploy" data-i18n="closingCta">开始部署 →</a></section>
+  </main>
+  <footer class="site-footer"><div class="page-width footer-inner"><a class="brand" href="#"><span class="brand-mark" aria-hidden="true">b/</span><bdi dir="ltr">babaShare</bdi></a><p class="footer-copy" data-i18n="footerCopy">轻量、自托管的 HTML 原型协作与分享平台。</p><nav class="footer-links" aria-label="仓库与文档" data-i18n-aria="footerNav"><a href="https://github.com/LeonKou/babaShare" dir="ltr">GitHub ↗</a><a href="https://github.com/LeonKou/babaShare/blob/HEAD/DEPLOYMENT.md" data-i18n="footerDeploy">部署手册 ↗</a><a href="https://github.com/LeonKou/babaShare/blob/HEAD/MCP-README.md" data-i18n="footerMcp">MCP 指南 ↗</a></nav></div></footer>
+</body>
+</html>
