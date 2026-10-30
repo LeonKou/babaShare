@@ -1,0 +1,12 @@
+**
+!server.py
+!backend/
+!backend/*.py
+!web/
+!web/*.html
+!web/assets/
+!web/assets/*.js
+!web/assets/*.css
+!Dockerfile
+!.dockerignore
+!compose.yaml

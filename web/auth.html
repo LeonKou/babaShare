@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN" dir="ltr" data-mode="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>babaShare · 登录</title>
+    <script src="assets/boot.js"></script>
+    <link rel="stylesheet" href="assets/tokens.css" />
+    <link rel="stylesheet" href="assets/components.css" />
+    <link rel="stylesheet" href="assets/layout.css" />
+  </head>
+  <body class="auth-body">
+    <aside class="auth-story">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"
+          ><i></i><i></i><i></i><i></i></span
+        >babaShare
+      </div>
+      <div>
+        <p class="eyebrow" data-i18n="authEyebrow">从灵感到体验</p>
+        <h1 id="auth-story-title">让原型，触手可及。</h1>
+        <p data-i18n="authStoryText">
+          一个空间，连接你的页面、想法和团队。轻松管理 HTML
+          原型，安全分享每一处细节。
+        </p>
+        <div class="workspace-note row">
+          <span id="security-icon"></span
+          ><span data-i18n="security">安全隔离</span>
+        </div>
+      </div>
+      <p class="small" data-i18n="authFooter">为高效协作而设计。</p>
+    </aside>
+    <div class="auth-settings" id="auth-settings"></div>
+    <main class="auth-panel">
+      <form id="auth-form" novalidate>
+        <h2 id="auth-title" data-i18n="loginTitle">欢迎回来</h2>
+        <p class="auth-intro" id="auth-hint" data-i18n="loginHint">
+          登录你的账户，继续团队协作。
+        </p>
+        <div id="auth-fields"></div>
+        <p class="form-note" data-i18n="required">带 * 的字段为必填项。</p>
+        <div
+          id="auth-status"
+          class="status-line"
+          role="status"
+          aria-live="polite"
+          data-i18n="loading"
+        >
+          正在加载…
+        </div>
+        <button
+          type="submit"
+          class="primary"
+          id="auth-submit"
+          data-i18n="login"
+        >
+          登录
+        </button>
+        <div class="auth-footer" id="auth-switch"></div>
+      </form>
+    </main>
+    <div id="global-toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="assets/i18n.js"></script>
+    <script src="assets/common.js"></script>
+    <script src="assets/api.js"></script>
+    <script src="assets/auth.js"></script>
+  </body>
+</html>

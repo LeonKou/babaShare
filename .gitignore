@@ -1,0 +1,16 @@
+# Runtime data and user-uploaded prototypes
+/data/
+/filedb/
+.env
+
+# Python runtime
+__pycache__/
+*.py[cod]
+.venv/
+
+# Local validation data
+/.validation/
+
+# Local development audits and source backups
+/.dev-standards/
+/.workbuddy/

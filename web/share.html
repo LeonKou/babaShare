@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN" dir="ltr" data-mode="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>babaShare · 分享预览</title>
+    <script src="/baba-share/assets/boot.js"></script>
+    <link rel="stylesheet" href="/baba-share/assets/tokens.css" />
+    <link rel="stylesheet" href="/baba-share/assets/components.css" />
+    <link rel="stylesheet" href="/baba-share/assets/layout.css" />
+  </head>
+  <body class="share-body">
+    <div class="share-shell" id="share-shell">
+      <header class="share-topbar">
+        <div class="share-brand">
+          <span class="brand-mark" aria-hidden="true"
+            ><i></i><i></i><i></i><i></i></span
+          ><strong>babaShare</strong
+          ><span class="badge" data-i18n="sharedReadonly">只读分享</span>
+        </div>
+        <div class="actions" id="share-controls"></div>
+      </header>
+      <div class="share-layout" id="share-layout">
+        <aside class="share-sidebar" id="share-sidebar">
+          <h2 id="share-folder-title" data-i18n="shareTree">文件目录</h2>
+          <p id="share-expiry" class="small muted num"></p>
+          <nav
+            aria-label="文件目录"
+            data-i18n-label="shareTree"
+            id="share-tree-nav"
+          >
+            <ul class="file-tree" id="share-tree"></ul>
+          </nav>
+        </aside>
+        <main class="share-stage" id="share-stage">
+          <header class="preview-bar">
+            <div>
+              <h1
+                id="share-title"
+                class="share-title"
+                data-i18n="sharedPreview"
+              >
+                分享预览
+              </h1>
+              <p id="share-current" class="small muted"></p>
+            </div>
+            <div id="preview-actions" class="actions"></div>
+          </header>
+          <div
+            id="share-status"
+            class="status-line"
+            role="status"
+            aria-live="polite"
+            data-i18n="loading"
+          >
+            正在加载…
+          </div>
+          <iframe
+            id="shared-frame"
+            class="preview-frame"
+            title="分享预览"
+            data-i18n-title="sharedPreview"
+            sandbox="allow-scripts"
+            allow="fullscreen"
+            allowfullscreen
+            hidden
+          ></iframe>
+          <div id="share-state" class="empty" hidden></div>
+        </main>
+      </div>
+    </div>
+    <div id="global-toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/baba-share/assets/i18n.js"></script>
+    <script src="/baba-share/assets/common.js"></script>
+    <script src="/baba-share/assets/api.js"></script>
+    <script src="/baba-share/assets/share.js"></script>
+  </body>
+</html>

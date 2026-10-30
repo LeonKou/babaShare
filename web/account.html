@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN" dir="ltr" data-mode="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>babaShare · 个人中心</title>
+    <script src="assets/boot.js"></script>
+    <link rel="stylesheet" href="assets/tokens.css" />
+    <link rel="stylesheet" href="assets/components.css" />
+    <link rel="stylesheet" href="assets/layout.css" />
+  </head>
+  <body>
+    <main class="page">
+      <nav class="crumbs" aria-label="面包屑" data-i18n-label="breadcrumb">
+        <ol>
+          <li><a href="index.html" data-i18n="home">首页</a></li>
+          <li aria-current="page" data-i18n="account">个人中心</li>
+        </ol>
+      </nav>
+      <header class="page-head">
+        <div>
+          <h1 data-i18n="account">个人中心</h1>
+          <p class="muted small" data-i18n="profileHint">
+            你的个人信息和已创建的分享链接。
+          </p>
+        </div>
+      </header>
+      <section class="section" aria-labelledby="profile-title">
+        <h2 class="sr-only" id="profile-title" data-i18n="profile">账户资料</h2>
+        <div id="profile-summary" class="profile-summary"></div>
+      </section>
+      <section class="section" aria-labelledby="mcp-title">
+        <header class="page-head">
+          <div>
+            <h2 id="mcp-title" data-i18n="mcpKeys">MCP Key</h2>
+            <p class="muted small" data-i18n="mcpKeysHint">使用个人密钥连接 AI 客户端，调用你已有权限内的工作区与文件。</p>
+          </div>
+          <button id="mcp-create" type="button" class="primary" data-i18n="mcpCreate" disabled>创建 MCP Key</button>
+        </header>
+        <p id="mcp-limit" class="form-note"></p>
+        <div class="field">
+          <label for="mcp-filter" data-i18n="mcpFilter">密钥状态</label>
+          <select id="mcp-filter">
+            <option value="all" data-i18n="mcpAll">全部密钥</option>
+            <option value="active" data-i18n="active">有效</option>
+            <option value="expired" data-i18n="expired">已过期</option>
+            <option value="revoked" data-i18n="revoked">已撤销</option>
+          </select>
+        </div>
+        <div id="mcp-pagination" class="pagination"></div>
+        <div id="mcp-status" class="status-line" role="status" aria-live="polite"></div>
+        <div id="mcp-cards" class="cards"></div>
+        <div id="mcp-empty" hidden></div>
+      </section>
+      <section aria-labelledby="share-list-title">
+        <h2 id="share-list-title" data-i18n="myShares">我的分享</h2>
+        <div id="share-pagination" class="pagination"></div>
+        <div
+          id="account-status"
+          class="status-line"
+          role="status"
+          aria-live="polite"
+        ></div>
+        <div id="share-cards" class="cards"></div>
+        <div id="share-empty" hidden></div>
+      </section>
+    </main>
+    <div id="global-toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="assets/i18n.js"></script>
+    <script src="assets/bridge-core.js"></script>
+    <script src="assets/page-bridge.js"></script>
+    <script src="assets/common.js"></script>
+    <script src="assets/api.js"></script>
+    <script src="assets/pagination.js"></script>
+    <script src="assets/mcp-help.js"></script>
+    <script src="assets/account.js"></script>
+  </body>
+</html>

@@ -1,0 +1,32 @@
+services:
+  baba-share:
+    build: .
+    image: baba-share:local
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 15s
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      BABA_SHARE_HOST: 0.0.0.0
+      BABA_SHARE_DATA_DIR: /var/lib/baba-share
+      BABA_SHARE_PORT: "8080"
+      BABA_SHARE_PREVIEW_PORT: "8081"
+      BABA_SHARE_PUBLIC_ORIGIN: ${BABA_SHARE_PUBLIC_ORIGIN:-http://127.0.0.1:${BABA_SHARE_PUBLISH_PORT:-8080}}
+      BABA_SHARE_PREVIEW_ORIGIN: ${BABA_SHARE_PREVIEW_ORIGIN:-http://127.0.0.1:${BABA_SHARE_PREVIEW_PUBLISH_PORT:-8081}}
+      BABA_SHARE_SECURE_COOKIE: ${BABA_SHARE_SECURE_COOKIE:-0}
+      BABA_SHARE_SESSION_HOURS: ${BABA_SHARE_SESSION_HOURS:-24}
+      BABA_SHARE_TICKET_SECONDS: ${BABA_SHARE_TICKET_SECONDS:-900}
+      BABA_SHARE_MAX_BODY_BYTES: ${BABA_SHARE_MAX_BODY_BYTES:-67108864}
+    ports:
+      - "${BABA_SHARE_PUBLISH_IP:-127.0.0.1}:${BABA_SHARE_PUBLISH_PORT:-8080}:8080"
+      - "${BABA_SHARE_PUBLISH_IP:-127.0.0.1}:${BABA_SHARE_PREVIEW_PUBLISH_PORT:-8081}:8081"
+    volumes:
+      - baba-share-data:/var/lib/baba-share
+
+volumes:
+  baba-share-data:
+    name: ${BABA_SHARE_VOLUME_NAME:-baba-share-data}

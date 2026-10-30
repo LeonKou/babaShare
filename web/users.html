@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN" dir="ltr" data-mode="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>babaShare · 用户管理</title>
+    <script src="assets/boot.js"></script>
+    <link rel="stylesheet" href="assets/tokens.css" />
+    <link rel="stylesheet" href="assets/components.css" />
+    <link rel="stylesheet" href="assets/layout.css" />
+  </head>
+  <body>
+    <main class="page">
+      <nav class="crumbs" aria-label="面包屑" data-i18n-label="breadcrumb">
+        <ol>
+          <li><a href="index.html" data-i18n="home">首页</a></li>
+          <li aria-current="page" data-i18n="users">用户管理</li>
+        </ol>
+      </nav>
+      <header class="page-head">
+        <div>
+          <h1 data-i18n="users">用户管理</h1>
+          <p class="muted small" data-i18n="userHint">
+            管理账户、访问权限与注册设置。
+          </p>
+        </div>
+        <div class="actions" id="user-actions"></div>
+      </header>
+      <section class="section card" aria-labelledby="registration-title">
+        <div class="toolbar">
+          <div>
+            <h2 id="registration-title" data-i18n="registration">开放注册</h2>
+            <p
+              class="muted small"
+              id="registration-hint"
+              data-i18n="registrationHint"
+            >
+              开启后，任何人都可以注册新账户。
+            </p>
+          </div>
+          <input
+            type="checkbox"
+            id="registration-toggle"
+            aria-labelledby="registration-title"
+            aria-describedby="registration-hint"
+          />
+        </div>
+      </section>
+      <section aria-label="账户列表" data-i18n-label="userList">
+        <form id="user-search" class="search">
+          <label class="sr-only" for="user-query" data-i18n="userSearch"
+            >搜索名称或邮箱</label
+          ><input
+            id="user-query"
+            type="search"
+            data-i18n-placeholder="userSearch"
+            placeholder="搜索名称或邮箱"
+          /><button type="submit" data-i18n="searchButton">搜索</button>
+        </form>
+        <div id="user-pagination" class="pagination"></div>
+        <div
+          id="user-status"
+          class="status-line"
+          role="status"
+          aria-live="polite"
+        ></div>
+        <div id="user-cards" class="cards"></div>
+        <div id="user-empty" hidden></div>
+      </section>
+    </main>
+    <div id="global-toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="assets/i18n.js"></script>
+    <script src="assets/bridge-core.js"></script>
+    <script src="assets/page-bridge.js"></script>
+    <script src="assets/common.js"></script>
+    <script src="assets/api.js"></script>
+    <script src="assets/pagination.js"></script>
+    <script src="assets/users.js"></script>
+  </body>
+</html>

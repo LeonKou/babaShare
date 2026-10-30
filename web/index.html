@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN" dir="ltr" data-mode="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>babaShare</title>
+    <script src="assets/boot.js"></script>
+    <link rel="stylesheet" href="assets/tokens.css" />
+    <link rel="stylesheet" href="assets/components.css" />
+    <link rel="stylesheet" href="assets/layout.css" />
+  </head>
+  <body class="app-body">
+    <div class="app-shell">
+      <div class="app-brand">
+        <span class="brand-mark" aria-hidden="true"
+          ><i></i><i></i><i></i><i></i></span
+        ><span>babaShare</span>
+      </div>
+      <header class="app-topbar">
+        <div class="topbar-title">
+          <strong data-i18n="workspaces">工作区</strong
+          ><span class="muted">/</span
+          ><span data-i18n="collaboration">一起，把想法变成体验。</span>
+        </div>
+        <div id="shell-controls" class="topbar-controls"></div>
+      </header>
+      <aside class="app-menu">
+        <nav
+          id="primary-nav"
+          aria-label="主导航"
+          data-i18n-label="primaryNavigation"
+        >
+          <p class="app-menu-label" data-i18n="workspace">工作区</p>
+          <div class="menu-items" id="workspace-nav"></div>
+          <button
+            type="button"
+            class="menu-item"
+            id="new-workspace"
+            data-i18n-label="newWorkspace"
+            aria-label="新建工作区"
+          >
+            <span id="new-workspace-icon"></span
+            ><span data-i18n="newWorkspace">新建工作区</span>
+          </button>
+        </nav>
+        <nav aria-label="账户导航" data-i18n-label="accountNavigation">
+          <p class="app-menu-label" data-i18n="account">个人中心</p>
+          <div class="menu-items" id="account-nav"></div>
+        </nav>
+        <div class="menu-bottom">
+          <div
+            class="small muted"
+            style="padding-inline: var(--space-3)"
+            data-i18n="authFooter"
+          >
+            为高效协作而设计。
+          </div>
+          <div id="shell-account" class="account-card"></div>
+          <button
+            type="button"
+            class="menu-item"
+            id="logout"
+            data-i18n-label="logout"
+            aria-label="退出登录"
+          >
+            <span id="logout-icon"></span
+            ><span data-i18n="logout">退出登录</span>
+          </button>
+        </div>
+      </aside>
+      <main class="app-main">
+        <iframe
+          id="page-frame"
+          src="workspace.html"
+          allow="fullscreen"
+          allowfullscreen
+          title="工作区"
+          data-i18n-title="workspace"
+        ></iframe>
+      </main>
+    </div>
+    <div id="global-toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="assets/i18n.js"></script>
+    <script src="assets/bridge-core.js"></script>
+    <script src="assets/app-bridge.js"></script>
+    <script src="assets/common.js"></script>
+    <script src="assets/api.js"></script>
+    <script src="assets/shell.js"></script>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    BABA_SHARE_HOST=0.0.0.0 \
+    BABA_SHARE_DATA_DIR=/var/lib/baba-share
+
+WORKDIR /opt/baba-share
+COPY --chown=10001:10001 server.py ./
+COPY --chown=10001:10001 backend/ ./backend/
+COPY --chown=10001:10001 web/ ./web/
+RUN mkdir -p /var/lib/baba-share && chown 10001:10001 /var/lib/baba-share
+USER 10001:10001
+EXPOSE 8080 8081
+HEALTHCHECK --interval=30s --timeout=8s --start-period=30s --retries=3 CMD ["python", "-c", "import http.client; cs=[http.client.HTTPConnection('127.0.0.1',p,timeout=3) for p in (8080, 8081)]; [c.request('GET','/baba-share/') for c in cs]; rs=[c.getresponse() for c in cs]; assert [r.status for r in rs]==[200,404]; assert all(r.getheader('Server','').startswith('babaShare') for r in rs); [r.read() for r in rs]; [c.close() for c in cs]"]
+CMD ["python", "server.py"]
