@@ -31,30 +31,19 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.database_path, Path(directory).resolve() / "data" / "baba-share.sqlite3")
             self.assertTrue((config.root / "filedb").is_dir())
 
-    def test_existing_database_is_preserved_and_announced(self):
+    def test_unrelated_database_is_untouched_and_not_selected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "data").mkdir()
-            legacy = root / "data" / "product-share.sqlite3"
-            legacy.write_bytes(b"existing-database")
-            with self.assertWarnsRegex(RuntimeWarning, "继续使用"):
-                config = Config(root)
-            self.assertEqual(config.database_path, legacy.resolve())
-            self.assertEqual(legacy.read_bytes(), b"existing-database")
-            self.assertFalse((root / "data" / "baba-share.sqlite3").exists())
-
-    def test_both_database_files_block_startup_without_changes(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "data").mkdir()
-            legacy = root / "data" / "product-share.sqlite3"
-            current = root / "data" / "baba-share.sqlite3"
-            legacy.write_bytes(b"existing-database")
-            current.write_bytes(b"new-database")
-            with self.assertRaisesRegex(ValueError, "同时发现两个数据库"):
-                Config(root)
-            self.assertEqual(legacy.read_bytes(), b"existing-database")
-            self.assertEqual(current.read_bytes(), b"new-database")
+            unrelated = root / "data" / "product-share.sqlite3"
+            unrelated.write_bytes(b"existing-database")
+            config = Config(root)
+            self.assertEqual(config.database_path, root.resolve() / "data" / "baba-share.sqlite3")
+            self.assertEqual(unrelated.read_bytes(), b"existing-database")
+            self.assertFalse(config.database_path.exists())
+            config.database_path.write_bytes(b"current-database")
+            self.assertEqual(Config(root).database_path.read_bytes(), b"current-database")
+            self.assertEqual(unrelated.read_bytes(), b"existing-database")
 
     def test_origin_validation_and_normalization(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -64,15 +53,14 @@ class ConfigTests(unittest.TestCase):
             for origin in invalid:
                 with self.subTest(origin=origin), self.assertRaises(ValueError):
                     Config(Path(directory), public_origin=origin)
-            config = Config(Path(directory), public_origin="https://EXAMPLE.COM:443/", preview_origin="https://preview.example.com/")
+            config = Config(Path(directory), public_origin="https://EXAMPLE.COM:443/")
             self.assertEqual(config.public_origin, "https://example.com")
-            self.assertEqual(config.preview_origin, "https://preview.example.com")
-            with self.assertRaisesRegex(ValueError, "独立端口和来源"):
-                Config(Path(directory), public_origin="https://example.com:443", preview_origin="https://EXAMPLE.COM/")
+            self.assertFalse(hasattr(config, "preview_origin"))
+            self.assertFalse(hasattr(config, "preview_port"))
             with self.assertRaisesRegex(ValueError, "IPv4"):
                 Config(Path(directory), host="::")
 
-    def test_dotenv_new_prefix_precedes_process_legacy_prefix(self):
+    def test_dotenv_reads_only_current_prefix(self):
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)
             (project / ".env").write_text("BABA_SHARE_DATA_DIR=.\nBABA_SHARE_PORT=12080\nBABA_SHARE_PREVIEW_PORT=12081\n", encoding="utf-8")
@@ -91,15 +79,19 @@ class ConfigTests(unittest.TestCase):
             with mock.patch("backend.config.__file__", str(Path(directory) / "backend" / "config.py")), mock.patch.dict(os.environ, environment, clear=True):
                 config = Config.from_env()
             self.assertEqual(config.root, Path(directory).resolve())
-            self.assertEqual((config.port, config.preview_port, config.secure_cookie), (12080, 12081, True))
+            self.assertEqual((config.port, config.secure_cookie), (12080, True))
 
-    def test_legacy_environment_variables_remain_supported(self):
+    def test_old_environment_and_preview_settings_are_ignored(self):
         with tempfile.TemporaryDirectory() as directory:
-            environment = {"PRODUCT_SHARE_DATA_DIR": directory, "PRODUCT_SHARE_PORT": "12080", "PRODUCT_SHARE_PREVIEW_PORT": "12081"}
-            with mock.patch("backend.config.__file__", str(Path(directory) / "backend" / "config.py")), mock.patch.dict(os.environ, environment, clear=True):
+            project = Path(directory)
+            (project / ".env").write_text("PRODUCT_SHARE_PORT=12080\nBABA_SHARE_PREVIEW_PORT=12081\n", encoding="utf-8")
+            environment = {"PRODUCT_SHARE_DATA_DIR": "unused", "PRODUCT_SHARE_PORT": "13080"}
+            with mock.patch("backend.config.__file__", str(project / "backend" / "config.py")), mock.patch.dict(os.environ, environment, clear=True):
                 config = Config.from_env()
-            self.assertEqual(config.root, Path(directory).resolve())
-            self.assertEqual((config.port, config.preview_port), (12080, 12081))
+                self.assertNotIn("PRODUCT_SHARE_PREVIEW_PORT", os.environ)
+            self.assertEqual(config.root, project.resolve())
+            self.assertEqual(config.port, 8080)
+            self.assertFalse(hasattr(config, "preview_port"))
 
     def test_relative_data_dir_and_dotenv_resolve_from_project(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -109,26 +101,23 @@ class ConfigTests(unittest.TestCase):
                 config = Config.from_env()
             self.assertEqual(config.root, project / "isolated")
             self.assertEqual(config.database_path, project / "isolated" / "data" / "baba-share.sqlite3")
-            self.assertEqual((config.port, config.preview_port), (12080, 12081))
+            self.assertEqual(config.port, 12080)
 
 
 class BackendTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.port, self.preview_port = free_port(), free_port()
-        while self.preview_port == self.port:
-            self.preview_port = free_port()
-        self.config = Config(Path(self.temporary.name), port=self.port, preview_port=self.preview_port)
+        self.port = free_port()
+        self.config = Config(Path(self.temporary.name), port=self.port)
         self.app = Application(self.config)
-        self.main, self.preview = self.app.servers()
-        self.threads = [threading.Thread(target=server.serve_forever, daemon=True)
-                        for server in (self.main, self.preview)]
+        self.main, = self.app.servers()
+        self.threads = [threading.Thread(target=self.main.serve_forever, daemon=True)]
         for thread in self.threads:
             thread.start()
         self.admin, self.admin_cookie = self.setup_admin()
 
     def tearDown(self):
-        for server in (self.main, self.preview):
+        for server in (self.main,):
             server.shutdown()
             server.server_close()
         for thread in self.threads:
@@ -136,7 +125,7 @@ class BackendTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def request(self, method, route, body=None, cookie="", query=None, origin=True, preview=False):
-        port = self.preview_port if preview else self.port
+        port = self.port
         path = route if preview else BASE + route
         if query:
             path += "?" + urlencode(query)
@@ -154,7 +143,7 @@ class BackendTests(unittest.TestCase):
         response_headers = dict(response.getheaders())
         status = response.status
         connection.close()
-        if response_headers.get("Content-Type", "").startswith("application/json"):
+        if data and response_headers.get("Content-Type", "").startswith("application/json"):
             data = json.loads(data)
         return status, data, response_headers
 
@@ -214,19 +203,19 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/session/detail", cookie=self.admin_cookie)[0], 401)
 
     def test_origin_csrf_and_preview_has_no_api(self):
-        for origin in (False, "null", self.config.preview_origin, "http://evil.example"):
+        for origin in (False, "null", "http://evil.example"):
             status, result, _ = self.request("POST", "/workspace", {"workspaceName": "blocked"}, self.admin_cookie, origin=origin)
             self.assertEqual(status, 403, result)
-        status, _, _ = self.request("GET", "/session/detail", cookie=self.admin_cookie, origin=self.config.preview_origin)
+        status, _, _ = self.request("GET", "/session/detail", cookie=self.admin_cookie, origin="null")
         self.assertEqual(status, 403)
-        status, _, _ = self.request("GET", BASE + "/session/detail", cookie=self.admin_cookie, preview=True)
+        status, _, _ = self.request("GET", "/baba-share/preview/api/session/detail", cookie=self.admin_cookie, preview=True)
         self.assertEqual(status, 404)
         status, _, _ = self.request("GET", "/session/detail", cookie=self.admin_cookie, origin=False)
         self.assertEqual(status, 200)
 
     def test_repeated_invalid_origin_body_returns_complete_error(self):
         for index in range(20):
-            status, result, headers = self.request("POST", "/workspace", {"workspaceName": "blocked-" + str(index), "description": "x" * 8192}, self.admin_cookie, origin=self.config.preview_origin)
+            status, result, headers = self.request("POST", "/workspace", {"workspaceName": "blocked-" + str(index), "description": "x" * 8192}, self.admin_cookie, origin="null")
             self.assertEqual(status, 403)
             self.assertEqual(result["status"], "ORIGIN_DENIED")
             self.assertEqual(headers["Connection"], "close")
@@ -236,7 +225,7 @@ class BackendTests(unittest.TestCase):
         workspace_id, share = self.create_site_share()
         self.write(workspace_id, "site/subdir/home.html", "<link href='style.css' rel='stylesheet'>")
         self.write(workspace_id, "site/subdir/style.css", "body{color:blue}")
-        root = "/baba-share/s/" + share["token"] + "/"
+        root = "/baba-share/preview/s/" + share["token"] + "/"
         status, _, headers = self.request("GET", root + "subdir", preview=True, origin=False)
         self.assertEqual(status, 307)
         self.assertEqual(headers["Location"], root + "subdir/")
@@ -256,7 +245,7 @@ class BackendTests(unittest.TestCase):
         self.assertEqual((listing["pageIndex"], listing["pageSize"], len(listing["entries"])), (2, 10, 10))
         self.assertEqual(listing["entryPath"], "INDEX.HTML")
         self.assertEqual(listing["data"], listing["entries"])
-        self.assertTrue(detail["previewBaseUrl"].endswith("/baba-share/s/" + share["token"] + "/"))
+        self.assertTrue(detail["previewBaseUrl"].endswith("/baba-share/preview/s/" + share["token"] + "/"))
 
     def test_node_search_and_sort_apply_before_sql_pagination(self):
         workspace_id = self.workspace()
@@ -726,7 +715,7 @@ source=source.replace('  await page.ready;', '  window.uploadTest={uploadFiles,s
         self.assertEqual(status, 200, detail)
         self.assertEqual(detail["listing"]["entryPath"], "INDEX.HTML")
         self.assertNotIn("workspaceId", detail["share"])
-        resource_root = "/baba-share/s/" + share["token"] + "/"
+        resource_root = "/baba-share/preview/s/" + share["token"] + "/"
         for path in ("", "INDEX.HTML", "assets/site.css", "assets/app.js", "assets/logo.svg"):
             status, raw, headers = self.request("GET", resource_root + path, preview=True, origin=False)
             self.assertEqual(status, 200, path)
@@ -743,12 +732,12 @@ source=source.replace('  await page.ready;', '  window.uploadTest={uploadFiles,s
         workspace_id, share = self.create_site_share()
         self.app.service.repo.execute("UPDATE folder_share SET expire_time=? WHERE id=?", (now_ms() - 1, db_id(share["id"])))
         self.assertEqual(self.request("GET", "/visitor/share/detail", query={"token": share["token"]})[0], 404)
-        self.assertEqual(self.request("GET", "/baba-share/s/" + share["token"] + "/INDEX.HTML", preview=True)[0], 404)
+        self.assertEqual(self.request("GET", "/baba-share/preview/s/" + share["token"] + "/INDEX.HTML", preview=True)[0], 404)
         editor, cookie = self.add_user("editor")
         self.invite(workspace_id, editor)
         _, shared, _ = self.request("POST", "/share", {"workspaceId": workspace_id, "path": "site"}, cookie)
         self.request("DELETE", "/member", cookie=self.admin_cookie, query={"workspaceId": workspace_id, "userId": editor["id"]})
-        self.assertEqual(self.request("GET", "/baba-share/s/" + shared["token"] + "/assets/app.js", preview=True)[0], 404)
+        self.assertEqual(self.request("GET", "/baba-share/preview/s/" + shared["token"] + "/assets/app.js", preview=True)[0], 404)
 
     def test_preview_ticket_expiry_permission_and_resource_isolation(self):
         workspace_id, _ = self.create_site_share()

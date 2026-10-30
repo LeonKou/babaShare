@@ -8,7 +8,8 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlencode, urljoin, urlsplit
+from unittest import mock
 
 from backend.config import Config
 from backend.controller import Application, BASE
@@ -19,17 +20,14 @@ class SecurityHttpTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory(prefix="baba-share-qa-")
-        cls.config = Config(root=Path(cls.temp.name), port=1, preview_port=2)
+        cls.config = Config(root=Path(cls.temp.name), port=1)
         cls.app = Application(cls.config)
         from http.server import ThreadingHTTPServer
-        cls.main = ThreadingHTTPServer(("127.0.0.1", 0), cls.app.handler(False))
-        cls.preview = ThreadingHTTPServer(("127.0.0.1", 0), cls.app.handler(True))
+        cls.main = ThreadingHTTPServer(("127.0.0.1", 0), cls.app.handler())
         cls.config.port = cls.main.server_port
-        cls.config.preview_port = cls.preview.server_port
         cls.config.public_origin = f"http://127.0.0.1:{cls.main.server_port}"
-        cls.config.preview_origin = f"http://127.0.0.1:{cls.preview.server_port}"
         cls.threads = []
-        for server in (cls.main, cls.preview):
+        for server in (cls.main,):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             cls.threads.append(thread)
@@ -52,7 +50,7 @@ class SecurityHttpTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        for server in (cls.main, cls.preview):
+        for server in (cls.main,):
             server.shutdown()
             server.server_close()
         for thread in cls.threads:
@@ -61,7 +59,7 @@ class SecurityHttpTests(unittest.TestCase):
 
     @classmethod
     def request(cls, method, route, actor=None, body=None, query=None, preview=False, headers=None):
-        port = cls.preview.server_port if preview else cls.main.server_port
+        port = cls.main.server_port
         path = route if preview or not route.startswith("/") else BASE + route
         if query:
             path += "?" + urlencode(query)
@@ -77,7 +75,7 @@ class SecurityHttpTests(unittest.TestCase):
             data = response.read()
             result_headers = dict(response.getheaders())
             result_headers = {key.lower(): value for key, value in result_headers.items()}
-            if "application/json" in result_headers.get("content-type", ""):
+            if data and "application/json" in result_headers.get("content-type", ""):
                 data = json.loads(data)
             return response.status, data, result_headers
         finally:
@@ -253,7 +251,7 @@ class SecurityHttpTests(unittest.TestCase):
                 finally:
                     connection.close()
 
-    def test_primary_pages_allow_same_origin_iframe_with_preview_origin(self):
+    def test_primary_pages_allow_only_same_origin_iframes(self):
         connection = http.client.HTTPConnection("127.0.0.1", self.main.server_port, timeout=10)
         try:
             connection.request("GET", "/baba-share/workspace.html")
@@ -264,7 +262,8 @@ class SecurityHttpTests(unittest.TestCase):
             policy = response.getheader("Content-Security-Policy")
             self.assertIn("frame-ancestors 'self'", policy)
             self.assertIn("frame-src 'self'", policy)
-            self.assertIn(self.config.preview_origin, policy)
+            self.assertIn("frame-src 'self';", policy)
+            self.assertNotIn("sandbox", policy)
         finally:
             connection.close()
 
@@ -293,12 +292,109 @@ class SecurityHttpTests(unittest.TestCase):
         self.file("private.txt", content="不可公开")
         return self.ok("POST", "/share", "owner", {"workspaceId": self.workspace, "path": "site", "expireHours": 1})
 
+    def assert_sandbox(self, headers):
+        self.assertIn("sandbox allow-scripts;", headers["content-security-policy"])
+        self.assertNotIn("allow-same-origin", headers["content-security-policy"])
+        self.assertEqual(headers["cache-control"], "no-store")
+        self.assertNotIn("set-cookie", headers)
+        self.assertNotIn("access-control-allow-credentials", headers)
+
+    def test_raw_preview_all_responses_keep_sandbox(self):
+        share = self.make_share()
+        prefix = "/baba-share/preview/s/" + share["token"]
+        cases = [("GET", prefix, 307), ("GET", prefix + "/index.html", 200),
+                 ("GET", prefix + "/missing.html", 404), ("GET", prefix + "/%FF", 400),
+                 ("GET", "/baba-share/preview", 404),
+                 ("GET", "/baba-share/preview/unknown/token/file.html", 404),
+                 ("GET", prefix + "/%2e%2e/private.txt", 400),
+                 ("POST", prefix + "/index.html", 405), ("PUT", prefix + "/index.html", 405),
+                 ("DELETE", prefix + "/index.html", 405), ("HEAD", prefix + "/index.html", 501),
+                 ("OPTIONS", prefix + "/index.html", 501), ("TRACE", prefix + "/index.html", 501),
+                 ("CUSTOM", prefix + "/index.html", 501)]
+        for method, path, expected in cases:
+            with self.subTest(method=method, path=path):
+                status, _, headers = self.request(method, path, preview=True)
+                self.assertEqual(status, expected)
+                self.assert_sandbox(headers)
+        with self.assertLogs("baba-share", level="ERROR"), mock.patch.object(self.app.service, "preview_resource", side_effect=RuntimeError("隔离测试错误")):
+            status, _, headers = self.request("GET", prefix + "/index.html", preview=True)
+        self.assertEqual(status, 500)
+        self.assert_sandbox(headers)
+        status, _, headers = self.request("GET", "/baba-share/s/" + share["token"], preview=True)
+        self.assertEqual(status, 200)
+        self.assertNotIn("sandbox", headers["content-security-policy"])
+        self.ok("DELETE", "/share", "owner", query={"id": share["id"]})
+        status, _, headers = self.request("GET", prefix + "/index.html", preview=True)
+        self.assertEqual(status, 404)
+        self.assert_sandbox(headers)
+
+    def test_malformed_preview_request_keeps_sandbox(self):
+        import socket
+        for request in (b"GET /baba-share/preview/s/token/index.html HTTP/invalid\r\n\r\n",
+                        b"GET /baba-share/preview/s/token/index.html\r\n\r\n"):
+            with self.subTest(request=request), socket.create_connection(("127.0.0.1", self.main.server_port), 5) as connection:
+                connection.sendall(request)
+                response = connection.makefile("rb").read()
+            self.assertIn(b"HTTP/1.1 400", response)
+            self.assertIn(b"Content-Security-Policy: sandbox allow-scripts;", response)
+            self.assertNotIn(b"allow-same-origin", response)
+
+    def test_null_origin_cannot_read_or_mutate_cookie_api(self):
+        for method, route, body in (("GET", "/session/detail", None),
+                                    ("POST", "/workspace", {"workspaceName": "blocked-opaque"})):
+            status, data, headers = self.request(method, route, "owner", body, headers={"Origin": "null"})
+            self.assertEqual((status, data["status"]), (403, "ORIGIN_DENIED"))
+            self.assertNotIn("access-control-allow-origin", headers)
+        status, _, headers = self.request("POST", "/mcp", "owner", {"jsonrpc": "2.0", "id": 1, "method": "ping"}, headers={"Origin": "null"})
+        self.assertEqual(status, 403)
+        self.assertNotIn("access-control-allow-origin", headers)
+
+    def test_preview_urls_share_one_origin_and_iframes_keep_sandbox(self):
+        share = self.make_share()
+        detail = self.ok("GET", "/visitor/share/detail", query={"token": share["token"]})
+        ticket = self.ok("POST", "/preview/ticket", "owner", {"workspaceId": self.workspace, "path": "site"})
+        for result, kind in ((detail, "s"), (ticket, "p")):
+            self.assertEqual(urlsplit(result["previewUrl"]).netloc, urlsplit(self.config.public_origin).netloc)
+            self.assertIn("/baba-share/preview/" + kind + "/", result["previewBaseUrl"])
+            self.assertTrue(result["previewUrl"].startswith(result["previewBaseUrl"]))
+            css = urljoin(result["previewUrl"], "assets/main.css")
+            status, _, headers = self.request("GET", urlsplit(css).path, preview=True)
+            self.assertEqual(status, 200)
+            self.assert_sandbox(headers)
+        html = (self.config.web_dir / "share.html").read_text(encoding="utf-8")
+        script = (self.config.web_dir / "assets/common.js").read_text(encoding="utf-8")
+        self.assertIn('sandbox="allow-scripts"', html)
+        self.assertIn('sandbox: "allow-scripts"', script)
+        self.assertNotIn("allow-same-origin", html + script)
+
+    @unittest.skipUnless(shutil.which("node"), "前端路径防护动态执行需要Node.js")
+    def test_share_file_query_cannot_navigate_outside_raw_namespace(self):
+        source = self.config.web_dir / "assets/share.js"
+        script = r'''
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const source=fs.readFileSync(process.argv[1],'utf8');
+const code=source.slice(source.indexOf('  function selectFile(entry)'),source.indexOf('  async function loadDirectory'));
+const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{});return nodes.get(id)};
+let notices=0;
+const context={$:get,previewBase:'http://127.0.0.1:12345/baba-share/preview/s/token/',currentFile:'',
+ toast:()=>notices++,I18n:{t:x=>x},URL,location:{href:'http://127.0.0.1:12345/baba-share/s/token'},history:{replaceState(){}},document:{querySelectorAll:()=>[]}};
+vm.createContext(context);vm.runInContext(code,context);
+for(const path of ['../../auth.html','./index.html','/index.html','site//index.html','site\\index.html']){
+ context.selectFile({name:'index.html',path});assert.equal(get('#shared-frame').src,undefined);
+}
+assert.equal(notices,5);
+context.selectFile({name:'index.html',path:'sub/index.html'});
+assert.equal(get('#shared-frame').src,context.previewBase+'sub/index.html');
+'''
+        result = subprocess.run(["node", "-e", script, str(source)], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_share_isolation_revocation_and_headers(self):
         share = self.make_share()
         detail = self.ok("GET", "/visitor/share/detail", query={"token": share["token"]})
         self.assertNotIn("workspaceId", detail["share"])
         self.assertTrue(all(entry["ownerId"] is None for entry in detail["listing"]["entries"]))
-        prefix = "/baba-share/s/" + share["token"] + "/"
+        prefix = "/baba-share/preview/s/" + share["token"] + "/"
         for resource in ("index.html", "assets/main.css"):
             status, _, headers = self.request("GET", prefix + resource, preview=True)
             self.assertEqual(status, 200)
@@ -318,14 +414,14 @@ class SecurityHttpTests(unittest.TestCase):
     def test_anonymous_directory_redirect_preserves_final_resource(self):
         share = self.make_share()
         self.file("site/sub/index.html", content="<html>子目录页面</html>")
-        prefix = "/baba-share/s/" + share["token"]
+        prefix = "/baba-share/preview/s/" + share["token"]
         for path in (prefix, prefix + "/sub"):
             with self.subTest(path=path):
                 status, _, headers = self.request("GET", path, preview=True)
                 self.assertIn(status, (301, 302, 307, 308))
                 location = urlsplit(headers["location"])
                 if location.netloc:
-                    self.assertEqual(location.netloc, urlsplit(self.config.preview_origin).netloc)
+                    self.assertEqual(location.netloc, urlsplit(self.config.public_origin).netloc)
                 self.assertEqual(location.path, path + "/")
                 final_status, data, _ = self.request("GET", location.path, preview=True)
                 self.assertEqual(final_status, 200)
@@ -335,7 +431,7 @@ class SecurityHttpTests(unittest.TestCase):
         self.file("site/index.html")
         self.file("site/main.css")
         share = self.ok("POST", "/share", "peer", {"workspaceId": self.workspace, "path": "site"})
-        prefix = "/baba-share/s/" + share["token"] + "/"
+        prefix = "/baba-share/preview/s/" + share["token"] + "/"
         self.assertEqual(self.request("GET", prefix + "main.css", preview=True)[0], 200)
         self.ok("DELETE", "/member", "owner", query={"workspaceId": self.workspace, "userId": self.users["peer"]["id"]})
         self.denied("GET", "/visitor/share/detail", None, query={"token": share["token"]}, expected=404)
@@ -346,14 +442,14 @@ class SecurityHttpTests(unittest.TestCase):
         share = self.make_share()
         self.ok("PATCH", "/folder", "owner", {"workspaceId": self.workspace, "path": "site", "newPath": "renamed"})
         for resource in ("index.html", "assets/main.css"):
-            self.assertEqual(self.request("GET", "/baba-share/s/" + share["token"] + "/" + resource, preview=True)[0], 404)
+            self.assertEqual(self.request("GET", "/baba-share/preview/s/" + share["token"] + "/" + resource, preview=True)[0], 404)
 
     def test_share_expiry_applies_to_assets(self):
         share = self.make_share()
         self.app.service.repo.execute("UPDATE folder_share SET expire_time=? WHERE id=?", (now_ms() - 1, db_id(share["id"])))
         self.denied("GET", "/visitor/share/detail", None, query={"token": share["token"]}, expected=404)
         for resource in ("index.html", "assets/main.css"):
-            self.assertEqual(self.request("GET", "/baba-share/s/" + share["token"] + "/" + resource, preview=True)[0], 404)
+            self.assertEqual(self.request("GET", "/baba-share/preview/s/" + share["token"] + "/" + resource, preview=True)[0], 404)
 
     def test_preview_ticket_revoked_by_member_removal(self):
         self.file("site/index.html")

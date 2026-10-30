@@ -1,4 +1,4 @@
-"""双端口线程HTTP服务与API控制器。"""
+"""单端口线程HTTP服务与API控制器。"""
 import json
 import logging
 import mimetypes
@@ -27,15 +27,9 @@ class Application:
         self.mcp = MCP(self.service)
 
     def servers(self):
-        main = ManagedHTTPServer((self.config.host, self.config.port), self.handler(False))
-        try:
-            preview = ManagedHTTPServer((self.config.host, self.config.preview_port), self.handler(True))
-        except Exception:
-            main.server_close()
-            raise
-        return main, preview
+        return (ManagedHTTPServer((self.config.host, self.config.port), self.handler()),)
 
-    def handler(self, preview):
+    def handler(self):
         app = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -50,6 +44,14 @@ class Application:
             def log_message(self, fmt, *args):
                 # 不使用默认HTTP日志，避免share token、ticket或query泄漏。
                 pass
+
+            def parse_request(self):
+                if not super().parse_request():
+                    return False
+                if self.request_version == "HTTP/0.9":
+                    self.send_error(400)
+                    return False
+                return True
 
             def do_GET(self):
                 self.handle_request()
@@ -66,6 +68,34 @@ class Application:
             def do_DELETE(self):
                 self.handle_request()
 
+            def is_preview_request(self):
+                target = getattr(self, "path", "")
+                if not target:
+                    parts = getattr(self, "raw_requestline", b"").decode("iso-8859-1").split()
+                    target = parts[1] if len(parts) > 1 else ""
+                try:
+                    path = urlsplit(target).path
+                except ValueError:
+                    path = target.split("?", 1)[0]
+                path = unquote(path, errors="replace")
+                return path == WEB_BASE + "/preview" or path.startswith(WEB_BASE + "/preview/")
+
+            def end_headers(self):
+                # 统一出口按请求分类，默认HTTP错误和重定向也不能丢失沙箱。
+                if self.is_preview_request():
+                    self.send_header("Content-Security-Policy", "sandbox allow-scripts; default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors " + app.config.public_origin)
+                    self.send_header("Cross-Origin-Resource-Policy", "cross-origin")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                else:
+                    self.send_header("X-Frame-Options", "SAMEORIGIN")
+                    self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'")
+                super().end_headers()
+
+            def send_error(self, code, message=None, explain=None):
+                if self.request_version == "HTTP/0.9":
+                    self.request_version = "HTTP/1.1"
+                self.reply({"msg": "HTTP请求不合法或方法不支持", "code": code, "status": "HTTP_REQUEST_INVALID"}, code)
+
             def reply(self, payload, status=200, content_type="application/json; charset=utf-8", cookie=None, headers=None):
                 raw = b"" if payload is None else payload if isinstance(payload, bytes) else json.dumps(payload, ensure_ascii=False).encode()
                 self.send_response(status)
@@ -75,13 +105,6 @@ class Application:
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("Referrer-Policy", "no-referrer")
                 self.send_header("Connection", "close")
-                if preview:
-                    self.send_header("Content-Security-Policy", "sandbox allow-scripts; default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors " + app.config.public_origin)
-                    self.send_header("Cross-Origin-Resource-Policy", "cross-origin")
-                    self.send_header("Access-Control-Allow-Origin", "*")
-                else:
-                    self.send_header("X-Frame-Options", "SAMEORIGIN")
-                    self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self' " + app.config.preview_origin + "; object-src 'none'; base-uri 'none'; frame-ancestors 'self'")
                 for name, value in (headers or {}).items():
                     self.send_header(name, value)
                 if cookie is not None:
@@ -91,7 +114,8 @@ class Application:
                         value += "; Secure"
                     self.send_header("Set-Cookie", value)
                 self.end_headers()
-                self.wfile.write(raw)
+                if getattr(self, "command", None) != "HEAD":
+                    self.wfile.write(raw)
                 self.close_connection = True
 
             def token(self):
@@ -108,6 +132,8 @@ class Application:
                     length = int(self.headers.get("Content-Length", "0"))
                 except ValueError:
                     raise BizError(400, "PARAM_INVALID", "请求长度错误") from None
+                if length > app.config.max_body_bytes:
+                    self.drain_body()
                 require(0 <= length <= app.config.max_body_bytes, 413, "PAYLOAD_TOO_LARGE", "请求过大")
                 if not length:
                     return {}
@@ -124,7 +150,7 @@ class Application:
                     length = int(self.headers.get("Content-Length", "0"))
                 except ValueError:
                     return
-                if 0 < length <= app.config.max_body_bytes and not self.headers.get("Transfer-Encoding"):
+                if 0 < length <= max(65536, app.config.max_body_bytes) and not self.headers.get("Transfer-Encoding"):
                     self.connection.settimeout(1)
                     try:
                         remaining = length
@@ -150,11 +176,12 @@ class Application:
 
             def handle_request(self):
                 api = False
+                raw_preview = self.is_preview_request()
                 try:
                     self.connection.settimeout(30)
                     parsed = urlsplit(self.path)
                     path = unquote(parsed.path, errors="strict")
-                    if preview:
+                    if raw_preview:
                         self.preview(path)
                         return
                     if path.startswith("/api/"):
@@ -198,7 +225,7 @@ class Application:
                 except OSError:
                     self.reply({"msg": "文件系统操作失败，请检查路径长度、磁盘空间与权限", "code": 400, "status": "STORAGE_ERROR"}, 400)
                 except Exception as exc:
-                    LOGGER.error(json.dumps({"event": "request-error", "errorType": type(exc).__name__, "api": api, "preview": preview}))
+                    LOGGER.error(json.dumps({"event": "request-error", "errorType": type(exc).__name__, "api": api, "preview": self.is_preview_request()}))
                     self.reply({"msg": "服务内部错误", "code": 500, "status": "INTERNAL_ERROR"}, 500)
 
             @staticmethod
@@ -210,19 +237,16 @@ class Application:
 
             def preview(self, path):
                 require(self.command == "GET", 405, "METHOD_NOT_ALLOWED", "预览服务只允许读取")
-                require(path.startswith(WEB_BASE + "/"), 404, "FILE_NOT_EXIST", "预览资源不存在")
-                path = path[len(WEB_BASE):]
+                prefix = WEB_BASE + "/preview"
+                require(path.startswith(prefix + "/"), 404, "FILE_NOT_EXIST", "预览资源不存在")
+                path = path[len(prefix):]
                 parts = path.split("/", 3)
                 require(len(parts) >= 3 and parts[1] in ("s", "p"), 404, "FILE_NOT_EXIST", "预览资源不存在")
                 kind, token, relative = parts[1], parts[2], parts[3] if len(parts) == 4 else ""
                 with app.service.lock:
                     disk, entry_path = app.service.preview_resource(kind, token, relative)
                     if entry_path and not path.endswith("/"):
-                        self.send_response(307)
-                        self.send_header("Location", WEB_BASE + quote(path, safe="/") + "/")
-                        self.send_header("Cache-Control", "no-store")
-                        self.send_header("Content-Length", "0")
-                        self.end_headers()
+                        self.reply(None, 307, headers={"Location": prefix + quote(path, safe="/") + "/"})
                         return
                     if entry_path:
                         disk = disk / entry_path
@@ -397,7 +421,7 @@ def run(config, check_only=False):
         LOGGER.info(json.dumps({"event": "started", "dataDir": str(config.root),
                                 "database": str(config.database_path),
                                 "page": config.public_origin + "/baba-share/",
-                                "preview": config.preview_origin, "python": platform.python_version(),
+                                "preview": config.public_origin + WEB_BASE + "/preview/", "python": platform.python_version(),
                                 "sqlite": sqlite3.sqlite_version}, ensure_ascii=False))
         try:
             stopping.wait()

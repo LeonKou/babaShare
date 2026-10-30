@@ -131,8 +131,6 @@ class Preflight:
             maximum = 87600 if name == "SESSION_HOURS" else 86400 if name == "TICKET_SECONDS" else 1024 * 1024 * 1024
             if type(value) is not int or not minimum <= value <= maximum:
                 raise RuntimeError(f"BABA_SHARE_{name} 必须在 {minimum} 到 {maximum} 之间")
-        if config.port == config.preview_port:
-            raise RuntimeError("主服务端口与预览端口必须不同")
         resources = ("index.html", "auth.html", "users.html", "workspace.html", "share.html", "account.html",
                      "assets/common.js", "assets/boot.js", "assets/tokens.css", "assets/components.css",
                      "assets/layout.css", "assets/api.js", "assets/i18n.js", "assets/auth.js", "assets/shell.js",
@@ -143,12 +141,12 @@ class Preflight:
             path = config.web_dir / name
             if not path.is_file():
                 raise RuntimeError(f"网页运行资源缺失：{path}")
-        for port in (config.port, config.preview_port):
+        for port in (config.port,):
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     sock.bind((config.host, port))
             except OSError as exc:
-                raise RuntimeError(f"端口 {config.host}:{port} 不可用：{exc}; 请调整 BABA_SHARE_PORT/BABA_SHARE_PREVIEW_PORT") from None
+                raise RuntimeError(f"端口 {config.host}:{port} 不可用：{exc}; 请调整 BABA_SHARE_PORT") from None
         for path in (config.root, config.root / "data", config.root / "filedb"):
             if path.exists() and not path.is_dir():
                 raise RuntimeError(f"数据路径存在但不是目录：{path}")

@@ -27,9 +27,9 @@ from backend.service import BizError, digest
 class MCPTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="baba-share-mcp-")
-        self.config = Config(Path(self.temp.name), port=1, preview_port=2)
+        self.config = Config(Path(self.temp.name), port=1)
         self.app = Application(self.config)
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), self.app.handler(False))
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), self.app.handler())
         self.config.public_origin = f"http://127.0.0.1:{self.server.server_port}"
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -187,7 +187,7 @@ class MCPTests(unittest.TestCase):
 
     def test_legacy_database_migration_is_nullable_and_master_is_lazy(self):
         with tempfile.TemporaryDirectory(prefix="baba-share-old-db-") as root:
-            config = Config(Path(root), port=1, preview_port=2)
+            config = Config(Path(root), port=1)
             connection = sqlite3.connect(config.database_path)
             try:
                 connection.execute("CREATE TABLE auth_mcp_key (id BLOB PRIMARY KEY,user_id BLOB NOT NULL,key_name TEXT NOT NULL,key_prefix TEXT NOT NULL,key_hash TEXT NOT NULL,request_id TEXT NOT NULL,request_hash TEXT NOT NULL,expire_time BIGINT,revoked_time BIGINT,create_time BIGINT NOT NULL,update_time BIGINT NOT NULL)")

@@ -24,7 +24,7 @@ class McpKeySecurityTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="baba-share-mcp-qa-")
         self.addCleanup(self.temp.cleanup)
-        self.config = Config(Path(self.temp.name), port=1, preview_port=2)
+        self.config = Config(Path(self.temp.name), port=1)
         self.service = Service(self.config)
         account = self.service.account({"userName": "qa-admin", "password": "qa-isolated-password-123"}, "setup")
         self.admin = self.service.repo.user(account["id"])
@@ -211,9 +211,9 @@ class McpHttpSecurityTests(unittest.TestCase):
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory(prefix="baba-share-mcp-http-qa-")
         cls.addClassCleanup(cls.temp.cleanup)
-        cls.config = Config(Path(cls.temp.name), port=1, preview_port=2)
+        cls.config = Config(Path(cls.temp.name), port=1)
         cls.app = Application(cls.config)
-        cls.main = ThreadingHTTPServer(("127.0.0.1", 0), cls.app.handler(False))
+        cls.main = ThreadingHTTPServer(("127.0.0.1", 0), cls.app.handler())
         cls.addClassCleanup(cls.main.server_close)
         cls.config.port = cls.main.server_port
         cls.config.public_origin = f"http://127.0.0.1:{cls.main.server_port}"

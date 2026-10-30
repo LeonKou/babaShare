@@ -48,6 +48,9 @@
   }
   function selectFile(entry) {
     if (
+      !entry.path ||
+      entry.path.split("/").some((part) => !part || part === "." || part === "..") ||
+      /[\\\x00]/.test(entry.path) ||
       !/\.(html?|png|jpe?g|gif|svg|webp|txt|css|js|json|pdf)$/i.test(entry.name)
     ) {
       toast(I18n.t("previewUnsupported"));

@@ -127,15 +127,14 @@ OpenCode 官方远程 MCP 配置使用 `type: "remote"`、`url`、`enabled: true
 
 `localhost`、`127.0.0.1` 和 `::1` 只表示客户端所在机器；不能让另一台机器连接你的服务。远程或跨设备访问必须使用客户端可达且证书可信的 HTTPS 地址。当前服务配置支持 IPv4/域名，不支持 IPv6 监听。
 
-参考 `.env.example`，生产反向代理部署须设置精确公开来源，并为主服务和不可信页面预览使用**不同 origin**：
+参考 `.env.example`，生产反向代理部署只需一个 HTTP 上游端口和一个精确公开来源：
 
 ```dotenv
 BABA_SHARE_PUBLIC_ORIGIN=https://share.example.com
-BABA_SHARE_PREVIEW_ORIGIN=https://preview.example.com
 BABA_SHARE_SECURE_COOKIE=1
 ```
 
-以上域名为示例，请替换；origin 不应包含路径、凭据、query 或片段。主服务监听地址/端口由 `BABA_SHARE_HOST`、`BABA_SHARE_PORT` 配置，预览端口由 `BABA_SHARE_PREVIEW_PORT` 配置。不要将预览页面与账户主站反代到相同 origin。反向代理应保持 `/baba-share/` 页面和 `/api/baba-share/core/v1/` API 路径，并转发 `Authorization`，不要记录该请求头。
+以上域名为示例，请替换；origin 不应包含路径、凭据、query 或片段。监听地址/唯一端口由 `BABA_SHARE_HOST`、`BABA_SHARE_PORT` 配置。主页面、API、MCP 与 `/baba-share/preview/{s|p}/token/...` 原始预览复用同一端口。预览响应通过 CSP `sandbox`（不含 `allow-same-origin`）使用不透明来源隔离，而不是第二监听端口。代理不得移除或放宽预览 CSP、缓存带票据页面，或把原始上传目录作为普通静态站点另行发布。反向代理应保持 `/baba-share/`（含预览）和 `/api/baba-share/core/v1/` 路径，保留实际公开 `Host` 并转发 `Authorization`，不要记录该请求头或带预览票据的完整路径。
 
 从实际公开 HTTPS 页面进入个人中心复制说明，页面将自动生成与当前部署 origin 一致的 MCP 地址。更多部署配置见项目 `DEPLOYMENT.md`。
 

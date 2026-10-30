@@ -16,10 +16,9 @@ from backend.runtime import Preflight, RuntimeLock
 
 class RuntimeTests(unittest.TestCase):
     def config(self, root, web=None):
-        with socket.socket() as first, socket.socket() as second:
-            first.bind(("127.0.0.1", 0))
-            second.bind(("127.0.0.1", 0))
-            return Config(Path(root), port=first.getsockname()[1], preview_port=second.getsockname()[1], web_dir=web)
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            return Config(Path(root), port=sock.getsockname()[1], web_dir=web)
 
     def test_preflight_initializes_database_in_temp_directory(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -112,7 +111,7 @@ class RuntimeTests(unittest.TestCase):
             with socket.socket() as occupied:
                 occupied.bind(("127.0.0.1", 0))
                 port = occupied.getsockname()[1]
-                config = Config(Path(directory), port=port, preview_port=port + 1)
+                config = Config(Path(directory), port=port)
                 with self.assertRaisesRegex(RuntimeError, "不可用"):
                     Preflight(config).run()
                 self.assertFalse(config.database_path.exists())
@@ -121,8 +120,7 @@ class RuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             config = self.config(directory)
             environment = os.environ.copy()
-            environment.update(BABA_SHARE_DATA_DIR=directory, BABA_SHARE_PORT=str(config.port),
-                               BABA_SHARE_PREVIEW_PORT=str(config.preview_port))
+            environment.update(BABA_SHARE_DATA_DIR=directory, BABA_SHARE_PORT=str(config.port))
             result = subprocess.run([sys.executable, "server.py", "--check"], cwd=Path(__file__).resolve().parent.parent,
                                     env=environment, capture_output=True, text=True, timeout=15)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -146,7 +144,7 @@ class RuntimeTests(unittest.TestCase):
                 Preflight(config).run()
             self.assertFalse(config.database_path.exists())
 
-    def test_server_termination_stops_both_listeners_and_releases_lock(self):
+    def test_server_termination_stops_single_listener_and_releases_lock(self):
         from backend.controller import LOGGER, run
         with tempfile.TemporaryDirectory() as directory:
             config = self.config(directory)
@@ -280,8 +278,8 @@ class RuntimeTests(unittest.TestCase):
         import re
         compose = (Path(__file__).resolve().parent.parent / "compose.yaml").read_text(encoding="utf-8")
         values = {line.strip().split(": ", 1)[0]: line.strip().split(": ", 1)[1]
-                  for line in compose.splitlines() if line.strip().startswith(("BABA_SHARE_PUBLIC_ORIGIN:", "BABA_SHARE_PREVIEW_ORIGIN:"))}
-        environment = {"BABA_SHARE_PUBLISH_PORT": "18080", "BABA_SHARE_PREVIEW_PUBLISH_PORT": "18081"}
+                  for line in compose.splitlines() if line.strip().startswith("BABA_SHARE_PUBLIC_ORIGIN:")}
+        environment = {"BABA_SHARE_PUBLISH_PORT": "18080"}
 
         def expand(value):
             while "${" in value:
@@ -290,7 +288,8 @@ class RuntimeTests(unittest.TestCase):
             return value
 
         self.assertEqual(expand(values["BABA_SHARE_PUBLIC_ORIGIN"]), "http://127.0.0.1:18080")
-        self.assertEqual(expand(values["BABA_SHARE_PREVIEW_ORIGIN"]), "http://127.0.0.1:18081")
+        self.assertNotIn("PREVIEW_", compose)
+        self.assertNotIn("8081", compose)
         environment["BABA_SHARE_PUBLIC_ORIGIN"] = "https://share.example.com"
         self.assertEqual(expand(values["BABA_SHARE_PUBLIC_ORIGIN"]), "https://share.example.com")
 
@@ -305,7 +304,8 @@ class RuntimeTests(unittest.TestCase):
         health = next(line for line in docker.splitlines() if line.startswith("HEALTHCHECK"))
         command = json.loads(health.split(" CMD ", 1)[1])
         compile(command[2], "healthcheck", "exec")
-        self.assertIn("8080, 8081", command[2])
+        self.assertIn("8080", command[2])
+        self.assertNotIn("8081", docker)
         compose = (project / "compose.yaml").read_text(encoding="utf-8")
         self.assertIn("baba-share-data:/var/lib/baba-share", compose)
         self.assertIn("BABA_SHARE_PUBLISH_IP:-127.0.0.1", compose)

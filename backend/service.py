@@ -802,9 +802,9 @@ class Service:
             entry["ownerId"] = None
         if listing["entryPath"]:
             listing["entryPath"] = relative_to_root(listing["entryPath"])
-        preview_base = self.config.preview_origin + "/baba-share/s/" + token + "/"
+        preview_base = self.config.public_origin + "/baba-share/preview/s/" + token + "/"
         preview = preview_base + quote(listing["entryPath"] or relative, safe="/")
-        if not listing["entryPath"]:
+        if not listing["entryPath"] and relative:
             preview += "/"
         view = self.share_view(share)
         # 匿名目录响应不泄露内部工作空间或所有者标识。
@@ -823,7 +823,7 @@ class Service:
                           (db_id(new_id()), digest(token), db_id(workspace_id), db_id(user["id"]), path, expiry, stamp, stamp))
         entry = listing["entryPath"]
         relative_entry = entry[len(path) + 1:] if path and entry else entry
-        preview_base = self.config.preview_origin + "/baba-share/p/" + token + "/"
+        preview_base = self.config.public_origin + "/baba-share/preview/p/" + token + "/"
         return {"previewUrl": preview_base + quote(relative_entry or "", safe="/"),
                 "previewBaseUrl": preview_base, "expireTime": expiry, "entryPath": entry}
 
