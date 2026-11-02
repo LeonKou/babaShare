@@ -7,11 +7,24 @@
     install: "/visitor/install/detail",
     setup: "/visitor/account/setup",
     registration: "/visitor/account/registration",
+    emailRegistration: "/visitor/email/registration",
+    emailActivation: "/visitor/email/activation",
+    passwordResetRequest: "/visitor/password-reset/request",
+    passwordResetConfirmation: "/visitor/password-reset/confirmation",
+    accountEmail: "/account/email/detail",
+    emailChangeRequest: "/account/email-change/request",
+    emailChangeVerification: "/account/email-change/verification",
+    emailChangeProposal: "/account/email-change/proposal",
+    emailChangeConfirmation: "/account/email-change/confirmation",
+    emailBindingRequest: "/account/email-binding/request",
+    emailBindingConfirmation: "/account/email-binding/confirmation",
     login: "/visitor/session",
     session: "/session",
     me: "/session/detail",
     workspaces: "/workspace/list",
     workspace: "/workspace",
+    workspaceAdmin: "/workspace-admin/list",
+    workspaceOwnership: "/workspace/ownership",
     members: "/member/list",
     member: "/member",
     invitations: "/invitation/list",
@@ -33,15 +46,19 @@
     user: "/user",
     setting: "/setting",
     settings: "/setting/detail",
+    mailSettings: "/mail-setting/detail",
+    mailSetting: "/mail-setting",
+    mailTest: "/mail-setting/test",
   };
   window.API = (key, options) => {
     if (!Object.hasOwn(paths, key)) throw new Error("API_NOT_ALLOWED");
-    const anonymous = ["install", "setup", "registration", "login", "shareDetail"];
+    const anonymous = ["install", "setup", "registration", "emailRegistration", "emailActivation", "passwordResetRequest", "passwordResetConfirmation", "login", "shareDetail"];
     return UI.api(base + paths[key], {
       ...options,
       // 退出操作自行在finally导航，失败也必须能离开工作台。
       authRequired:
         !(key === "session" && options?.method === "DELETE") &&
+        !(options?.keepPageOnUnauthorized && ["me", "accountEmail", "emailChangeVerification", "emailChangeProposal", "emailChangeConfirmation", "emailBindingConfirmation"].includes(key)) &&
         !anonymous.includes(key),
     });
   };

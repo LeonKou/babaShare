@@ -3,6 +3,8 @@
 /filedb/
 /backups/
 .env
+.env.*
+!.env.example
 
 # Python runtime
 __pycache__/

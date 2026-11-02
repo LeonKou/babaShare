@@ -93,7 +93,16 @@ class Application:
                     self.send_header("Access-Control-Allow-Origin", "*")
                 else:
                     self.send_header("X-Frame-Options", "SAMEORIGIN")
-                    self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'")
+                    path = unquote(urlsplit(self.path).path, errors="replace")
+                    office_asset = path.startswith(WEB_BASE + "/vendor/office/")
+                    office_viewer = path in (WEB_BASE + "/preview-office.html", WEB_BASE + "/assets/preview-office-worker.js")
+                    code_viewer = path in (WEB_BASE + "/preview-code.html", WEB_BASE + "/assets/preview-code-worker.js")
+                    if office_asset or office_viewer:
+                        # 仅可信本地 Office 引擎需要内联脚本、WASM和本地 blob；上传HTML仍走上方opaque沙箱。
+                        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self' blob:; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'self'")
+                    else:
+                        script_policy = "'self' 'unsafe-eval'" if code_viewer else "'self'"
+                        self.send_header("Content-Security-Policy", "default-src 'self'; script-src " + script_policy + "; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; worker-src 'self'; frame-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'self'")
                 super().end_headers()
 
             def send_error(self, code, message=None, explain=None):
@@ -178,6 +187,17 @@ class Application:
                 require(self.headers.get("Sec-Fetch-Site") in (None, "same-origin", "none"),
                         403, "ORIGIN_DENIED", "拒绝跨来源接口请求")
 
+            def mail_request_origin(self):
+                require(self.headers.get("Sec-Fetch-Site") in (None, "same-origin"),
+                        403, "ORIGIN_DENIED", "邮件请求必须来自同源页面")
+                require(len(self.headers.get_all("Origin", [])) <= 1 and
+                        len(self.headers.get_all("Sec-Fetch-Site", [])) <= 1,
+                        403, "ORIGIN_DENIED", "来源与浏览器元数据必须唯一")
+                origin = self.headers.get("Origin")
+                if origin is not None:
+                    app.service.mail_origin({}, origin)
+                return origin
+
             def handle_request(self):
                 api = False
                 raw_preview = self.is_preview_request()
@@ -217,7 +237,13 @@ class Application:
                         file = app.config.web_dir / relative
                         require(file.resolve().is_relative_to(app.config.web_dir.resolve()) and not file.is_symlink(), 403, "UNSAFE_PATH", "禁止越界路径")
                         require(file.is_file(), 404, "FILE_NOT_EXIST", "页面不存在")
-                        self.reply(file.read_bytes(), content_type=self.mime(file))
+                        raw = file.read_bytes()
+                        headers = None
+                        if relative.startswith("vendor/office/x2t-1/") and file.suffix.lower() in (".js", ".wasm"):
+                            # 上游 _headers 明确指定 x2t-1 为 Brotli；只压缩存储，不引入Python解压依赖。
+                            if not raw.startswith((b"//", b"var ", b"\x00asm")):
+                                headers = {"Content-Encoding": "br", "Vary": "Accept-Encoding"}
+                        self.reply(raw, content_type=self.mime(file), headers=headers)
                 except BizError as exc:
                     self.reply({"msg": exc.msg, "code": exc.code, "status": exc.status}, exc.code)
                 except (ValueError, TypeError, KeyError, AttributeError) as exc:
@@ -234,7 +260,8 @@ class Application:
 
             @staticmethod
             def mime(path):
-                content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+                overrides = {".wasm": "application/wasm", ".js": "application/javascript", ".mjs": "application/javascript", ".svg": "image/svg+xml"}
+                content_type = overrides.get(path.suffix.lower()) or mimetypes.guess_type(str(path))[0] or "application/octet-stream"
                 if content_type.startswith("text/") or content_type in ("application/javascript", "application/json"):
                     content_type += "; charset=utf-8"
                 return content_type
@@ -255,7 +282,9 @@ class Application:
                     if entry_path:
                         disk = disk / entry_path
                     raw = disk.read_bytes()
-                self.reply(raw, content_type=self.mime(disk))
+                download = parse_qs(urlsplit(self.path).query).get("download") == ["1"]
+                headers = {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(disk.name, safe="")} if download else None
+                self.reply(raw, content_type=self.mime(disk), headers=headers)
 
             def mcp_request(self):
                 request_id = None
@@ -311,11 +340,37 @@ class Application:
                     mode = "setup" if route.endswith("setup") else "registration"
                     user = service.account(body, mode)
                     return user, service.new_session(user["id"])
+                if route == "/visitor/email/registration" and method == "POST":
+                    return service.email_registration(body, self.client_address[0], self.mail_request_origin()), None
+                if route == "/visitor/email/activation" and method == "POST":
+                    return service.email_activation(body, self.client_address[0], self.token())
+                if route == "/visitor/password-reset/request" and method == "POST":
+                    return service.password_reset_request(body, self.client_address[0], self.mail_request_origin()), None
+                if route == "/visitor/password-reset/confirmation" and method == "POST":
+                    self.mail_request_origin()
+                    return service.password_reset_confirmation(body), None
                 if route == "/visitor/session" and method == "POST":
                     return service.login(body, self.client_address[0])
                 user = service.authenticated(self.token())
                 result = None
-                if route == "/session/detail" and method == "GET":
+                if route == "/account/email/detail" and method == "GET":
+                    result = service.email_detail(user, self.token())
+                elif route == "/account/email-change/request" and method == "POST":
+                    result = service.email_request(user, self.token(), self.client_address[0], self.mail_request_origin())
+                elif route == "/account/email-change/verification" and method == "POST":
+                    self.mail_request_origin()
+                    result = service.email_verification(user, self.token(), body)
+                elif route == "/account/email-change/proposal" and method == "POST":
+                    result = service.email_proposal(user, self.token(), body, self.client_address[0], self.mail_request_origin(), binding=False)
+                elif route == "/account/email-change/confirmation" and method == "POST":
+                    self.mail_request_origin()
+                    result = service.email_confirmation(user, self.token(), body, binding=False)
+                elif route == "/account/email-binding/request" and method == "POST":
+                    result = service.email_proposal(user, self.token(), body, self.client_address[0], self.mail_request_origin(), binding=True)
+                elif route == "/account/email-binding/confirmation" and method == "POST":
+                    self.mail_request_origin()
+                    result = service.email_confirmation(user, self.token(), body, binding=True)
+                elif route == "/session/detail" and method == "GET":
                     result = service.user_view(user)
                 elif route == "/session" and method == "DELETE":
                     service.repo.execute("DELETE FROM auth_session WHERE session_hash=?", (digest(self.token()),))
@@ -334,10 +389,22 @@ class Application:
                     result = service.account(body, actor=user)
                 elif route == "/user" and method == "PATCH":
                     result = service.change_user(user, body)
+                elif route == "/user" and method == "DELETE":
+                    result = service.user_delete(user, query.get("id"))
+                elif route == "/workspace-admin/list" and method == "GET":
+                    result = service.workspace_admin(user, query)
+                elif route == "/workspace/ownership" and method == "PATCH":
+                    result = service.workspace_ownership(user, body)
                 elif route == "/setting/detail" and method == "GET":
                     result = service.settings(user)
                 elif route == "/setting" and method == "PATCH":
                     result = service.settings(user, body)
+                elif route == "/mail-setting/detail" and method == "GET":
+                    result = service.mail_settings(user)
+                elif route == "/mail-setting" and method == "PATCH":
+                    result = service.mail_settings(user, body)
+                elif route == "/mail-setting/test" and method == "POST":
+                    result = service.mail_test(user, body)
                 elif route == "/workspace/list" and method == "GET":
                     result = service.workspaces(user)
                 elif route == "/workspace" and method == "POST":

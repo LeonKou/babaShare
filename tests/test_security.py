@@ -265,8 +265,9 @@ class SecurityHttpTests(unittest.TestCase):
             self.assertEqual(response.getheader("X-Frame-Options"), "SAMEORIGIN")
             policy = response.getheader("Content-Security-Policy")
             self.assertIn("frame-ancestors 'self'", policy)
-            self.assertIn("frame-src 'self'", policy)
-            self.assertIn("frame-src 'self';", policy)
+            self.assertIn("frame-src 'self' blob:;", policy)
+            self.assertNotIn("frame-src *", policy)
+            self.assertNotIn("frame-src https:", policy)
             self.assertNotIn("sandbox", policy)
         finally:
             connection.close()
@@ -415,7 +416,9 @@ const source=fs.readFileSync(process.argv[1],'utf8');
 const code=source.slice(source.indexOf('  function selectFile(entry)'),source.indexOf('  async function loadDirectory'));
 const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{});return nodes.get(id)};
 let notices=0;
-const context={$:get,previewBase:'http://127.0.0.1:12345/baba-share/preview/s/token/',currentFile:'',
+const loaded=[];
+const context={$:get,previewBase:'http://127.0.0.1:12345/baba-share/preview/s/token/',currentFile:'',previewViewer:null,
+ FilePreview:{create:()=>({load:entry=>loaded.push(entry)})},
  toast:()=>notices++,I18n:{t:x=>x},URL,location:{href:'http://127.0.0.1:12345/baba-share/s/token'},history:{replaceState(){}},document:{querySelectorAll:()=>[]}};
 vm.createContext(context);vm.runInContext(code,context);
 for(const path of ['../../auth.html','./index.html','/index.html','site//index.html','site\\index.html']){
@@ -423,10 +426,36 @@ for(const path of ['../../auth.html','./index.html','/index.html','site//index.h
 }
 assert.equal(notices,5);
 context.selectFile({name:'index.html',path:'sub/index.html'});
-assert.equal(get('#shared-frame').src,context.previewBase+'sub/index.html');
+assert.equal(loaded.length,1);
+assert.equal(loaded[0].url,context.previewBase+'sub/index.html');
+assert.equal(get('#shared-frame').src,undefined);
 '''
         result = subprocess.run(["node", "-e", script, str(source)], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_trusted_preview_csp_is_path_scoped_and_raw_download_stays_sandboxed(self):
+        for route, executable in (("/baba-share/preview-code.html", True),
+                                  ("/baba-share/assets/preview-code-worker.js", True),
+                                  ("/baba-share/workspace.html", False),
+                                  ("/baba-share/assets/preview.js", False)):
+            status, _, headers = self.request("GET", route, preview=True)
+            self.assertEqual(status, 200)
+            csp = headers["content-security-policy"]
+            self.assertEqual("'unsafe-eval'" in csp, executable, route)
+            self.assertIn("worker-src 'self'", csp)
+            self.assertIn("frame-src 'self' blob:", csp)
+            self.assertIn("media-src 'self' blob:", csp)
+            self.assertNotIn("https:", csp)
+        share = self.make_share()
+        prefix = "/baba-share/preview/s/" + share["token"] + "/index.html"
+        status, raw, headers = self.request("GET", prefix, query={"download": "1"}, preview=True)
+        self.assertEqual(status, 200)
+        self.assertIsInstance(raw, bytes)
+        self.assertIn("attachment; filename*=UTF-8''index.html", headers["content-disposition"])
+        self.assert_sandbox(headers)
+        self.assertEqual(headers["cache-control"], "no-store")
+        self.ok("DELETE", "/share", "owner", query={"id": share["id"]})
+        self.assertEqual(self.request("GET", prefix, query={"download": "1"}, preview=True)[0], 404)
 
     def test_share_isolation_revocation_and_headers(self):
         share = self.make_share()
@@ -562,6 +591,7 @@ class Element {
  replaceChildren(...items){this.children=[];this.append(...items);}
  setAttribute(k,v){this.attributes[k]=v;if(k==='value')this.value=v;if(k==='name')this.name=v;if(k==='id')this.id=v;}
  getAttribute(k){return this.attributes[k];}
+ removeAttribute(k){delete this.attributes[k];}
  addEventListener(k,fn){this.events[k]=fn;}
  removeEventListener(k,fn){if(this.events[k]===fn)delete this.events[k];}
  querySelector(){return null;}
@@ -717,7 +747,8 @@ vm.createContext(context);vm.runInContext(fs.readFileSync(process.argv[1],'utf8'
         script = """
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 let scriptUrl='http://127.0.0.1:12345/baba-share/assets/common.js';
-const context={window:{},URL,document:{querySelector:()=>({src:scriptUrl})},location:{protocol:'http:',origin:'http://127.0.0.1:12345'}};
+const events=new Map();
+const context={window:{addEventListener:(name,fn)=>{if(!events.has(name))events.set(name,new Set());events.get(name).add(fn);}},URL,document:{querySelector:()=>({src:scriptUrl})},location:{protocol:'http:',origin:'http://127.0.0.1:12345'}};
 vm.createContext(context);vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),context);
 for(const route of ['workspace','account','users','auth','shell']){
  const url=new URL(context.window.UI.routeUrl(route,{workspaceId:'a&b'}));

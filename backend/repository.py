@@ -37,6 +37,27 @@ CREATE TABLE IF NOT EXISTS app_setting (
  id BLOB PRIMARY KEY, is_registration_enabled INTEGER NOT NULL DEFAULT 0,
  create_time BIGINT NOT NULL, update_time BIGINT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS email_activation (
+ id BLOB PRIMARY KEY, email_address TEXT NOT NULL COLLATE NOCASE UNIQUE,
+ nickname TEXT NOT NULL, activation_hash TEXT NOT NULL UNIQUE,
+ expire_time BIGINT NOT NULL, create_time BIGINT NOT NULL, update_time BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_email_activation_expire_time ON email_activation(expire_time);
+CREATE TABLE IF NOT EXISTS registration_attempt (
+ id BLOB PRIMARY KEY, email_hash TEXT NOT NULL, client_hash TEXT NOT NULL,
+ create_time BIGINT NOT NULL, update_time BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_registration_attempt_email_time ON registration_attempt(email_hash,create_time);
+CREATE INDEX IF NOT EXISTS idx_registration_attempt_client_time ON registration_attempt(client_hash,create_time);
+CREATE INDEX IF NOT EXISTS idx_registration_attempt_create_time ON registration_attempt(create_time);
+CREATE TABLE IF NOT EXISTS account_email_token (
+ id BLOB PRIMARY KEY, user_id BLOB NOT NULL, token_purpose TEXT NOT NULL,
+ token_hash TEXT UNIQUE, session_hash TEXT, email_address TEXT NOT NULL,
+ previous_email TEXT, password_snapshot TEXT NOT NULL, flow_stage TEXT NOT NULL,
+ expire_time BIGINT NOT NULL, create_time BIGINT NOT NULL, update_time BIGINT NOT NULL,
+ UNIQUE(user_id,token_purpose)
+);
+CREATE INDEX IF NOT EXISTS idx_account_email_token_expire_time ON account_email_token(expire_time);
 CREATE TABLE IF NOT EXISTS auth_session (
  id BLOB PRIMARY KEY, session_hash TEXT NOT NULL UNIQUE, user_id BLOB NOT NULL,
  expire_time BIGINT NOT NULL, create_time BIGINT NOT NULL, update_time BIGINT NOT NULL
@@ -54,7 +75,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_auth_mcp_key_request ON auth_mcp_key(user_i
 CREATE INDEX IF NOT EXISTS idx_auth_mcp_key_user_time ON auth_mcp_key(user_id,create_time);
 CREATE TABLE IF NOT EXISTS project_workspace (
  id BLOB PRIMARY KEY, workspace_name TEXT NOT NULL, description TEXT NOT NULL,
- owner_id BLOB NOT NULL, create_time BIGINT NOT NULL, update_time BIGINT NOT NULL,
+ owner_id BLOB, creator_id BLOB, creator_nickname TEXT NOT NULL DEFAULT '',
+ create_time BIGINT NOT NULL, update_time BIGINT NOT NULL,
  UNIQUE(owner_id, workspace_name)
 );
 CREATE TABLE IF NOT EXISTS workspace_member (
@@ -74,7 +96,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_workspace_invitation_request ON workspace_i
 CREATE INDEX IF NOT EXISTS idx_workspace_invitation_workspace_time ON workspace_invitation(workspace_id,create_time);
 CREATE TABLE IF NOT EXISTS workspace_node (
  id BLOB PRIMARY KEY, workspace_id BLOB NOT NULL, node_path TEXT NOT NULL,
- node_kind TEXT NOT NULL, owner_id BLOB NOT NULL,
+ node_kind TEXT NOT NULL, owner_id BLOB,
  create_time BIGINT NOT NULL, update_time BIGINT NOT NULL,
  UNIQUE(workspace_id,node_path)
 );
@@ -97,8 +119,8 @@ CREATE TABLE IF NOT EXISTS preview_ticket (
 );
 """
 
-USER_COLUMNS = "id,user_name,nickname,password_hash,user_role,is_disabled,create_time,update_time"
-WORKSPACE_COLUMNS = "id,workspace_name,description,owner_id,create_time,update_time"
+USER_COLUMNS = "id,user_name,nickname,password_hash,user_role,is_disabled,email,is_email_verified,create_time,update_time"
+WORKSPACE_COLUMNS = "id,workspace_name,description,owner_id,creator_id,creator_nickname,create_time,update_time"
 NODE_COLUMNS = "id,workspace_id,node_path,node_kind,owner_id,create_time,update_time"
 SHARE_COLUMNS = "id,share_token,workspace_id,owner_id,root_path,expire_time,create_time,update_time"
 
@@ -109,13 +131,58 @@ class Repository:
         with self.connection() as connection:
             connection.executescript(SCHEMA)
             connection.execute("BEGIN IMMEDIATE")
+            self.migrate_custody(connection)
+            user_columns = {row["name"] for row in connection.execute("PRAGMA table_info(sys_user)")}
+            if "email" not in user_columns:
+                # 旧账号名不能证明邮箱归属；保留登录账号，邮箱迁移为空。
+                connection.execute("ALTER TABLE sys_user ADD COLUMN email TEXT COLLATE NOCASE")
+            if "is_email_verified" not in user_columns:
+                connection.execute("ALTER TABLE sys_user ADD COLUMN is_email_verified INTEGER NOT NULL DEFAULT 0")
+            connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS uk_sys_user_email ON sys_user(email)")
+            activation_columns = {row["name"] for row in connection.execute("PRAGMA table_info(email_activation)")}
+            if "user_name" not in activation_columns:
+                connection.execute("ALTER TABLE email_activation ADD COLUMN user_name TEXT COLLATE NOCASE")
+                # 旧待激活记录缺少独立账号，不能按新契约消费。
+                connection.execute("DELETE FROM email_activation WHERE user_name IS NULL")
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(auth_mcp_key)")}
             if "mcp_derivation_version" not in columns:
                 connection.execute("ALTER TABLE auth_mcp_key ADD COLUMN mcp_derivation_version TEXT")
             if "mcp_derivation_nonce" not in columns:
                 connection.execute("ALTER TABLE auth_mcp_key ADD COLUMN mcp_derivation_nonce TEXT")
+            setting_columns = {row["name"] for row in connection.execute("PRAGMA table_info(app_setting)")}
+            if "is_email_registration_enabled" not in setting_columns:
+                connection.execute("ALTER TABLE app_setting ADD COLUMN is_email_registration_enabled INTEGER NOT NULL DEFAULT 0")
+            if "registration_revision" not in setting_columns:
+                connection.execute("ALTER TABLE app_setting ADD COLUMN registration_revision INTEGER NOT NULL DEFAULT 0")
+            if "mail_settings" not in setting_columns:
+                connection.execute("ALTER TABLE app_setting ADD COLUMN mail_settings TEXT NOT NULL DEFAULT '{}'")
             stamp = now_ms()
             connection.execute("INSERT INTO app_setting (id,is_registration_enabled,create_time,update_time) SELECT ?,0,?,? WHERE NOT EXISTS (SELECT id FROM app_setting)", (db_id(new_id()), stamp, stamp))
+
+    @staticmethod
+    def migrate_custody(connection):
+        columns = {row["name"]: row for row in connection.execute("PRAGMA table_info(project_workspace)")}
+        if "creator_id" not in columns:
+            connection.execute("ALTER TABLE project_workspace ADD COLUMN creator_id BLOB")
+            connection.execute("ALTER TABLE project_workspace ADD COLUMN creator_nickname TEXT NOT NULL DEFAULT ''")
+            connection.execute("UPDATE project_workspace SET creator_id=owner_id,creator_nickname=COALESCE((SELECT nickname FROM sys_user WHERE sys_user.id=project_workspace.owner_id),'') WHERE creator_id IS NULL")
+        if columns["owner_id"]["notnull"]:
+            indexes = [row["sql"] for row in connection.execute("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='project_workspace' AND sql IS NOT NULL")]
+            connection.execute("ALTER TABLE project_workspace RENAME TO project_workspace_custody_old")
+            connection.execute("CREATE TABLE project_workspace (id BLOB PRIMARY KEY,workspace_name TEXT NOT NULL,description TEXT NOT NULL,owner_id BLOB,creator_id BLOB,creator_nickname TEXT NOT NULL DEFAULT '',create_time BIGINT NOT NULL,update_time BIGINT NOT NULL,UNIQUE(owner_id,workspace_name))")
+            connection.execute("INSERT INTO project_workspace (id,workspace_name,description,owner_id,creator_id,creator_nickname,create_time,update_time) SELECT id,workspace_name,description,owner_id,creator_id,creator_nickname,create_time,update_time FROM project_workspace_custody_old")
+            connection.execute("DROP TABLE project_workspace_custody_old")
+            for statement in indexes:
+                connection.execute(statement)
+        node_columns = {row["name"]: row for row in connection.execute("PRAGMA table_info(workspace_node)")}
+        if node_columns["owner_id"]["notnull"]:
+            indexes = [row["sql"] for row in connection.execute("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='workspace_node' AND sql IS NOT NULL")]
+            connection.execute("ALTER TABLE workspace_node RENAME TO workspace_node_custody_old")
+            connection.execute("CREATE TABLE workspace_node (id BLOB PRIMARY KEY,workspace_id BLOB NOT NULL,node_path TEXT NOT NULL,node_kind TEXT NOT NULL,owner_id BLOB,create_time BIGINT NOT NULL,update_time BIGINT NOT NULL,UNIQUE(workspace_id,node_path))")
+            connection.execute("INSERT INTO workspace_node (id,workspace_id,node_path,node_kind,owner_id,create_time,update_time) SELECT id,workspace_id,node_path,node_kind,owner_id,create_time,update_time FROM workspace_node_custody_old")
+            connection.execute("DROP TABLE workspace_node_custody_old")
+            for statement in indexes:
+                connection.execute(statement)
 
     @contextmanager
     def connection(self):

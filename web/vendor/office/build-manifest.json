@@ -1,0 +1,29 @@
+{
+  "version": "v9.3.0.24",
+  "sourceCommit": "02befd843ff32257a3d796d9e0d8d77914f8886f",
+  "repository": "https://github.com/baotlake/office-website",
+  "release": "https://github.com/baotlake/office-website/releases/download/v9.3.0.24/public-260304.zip",
+  "archiveBytes": 606149075,
+  "archiveSha256": "0b91dcd9772d46effc7512681e4b5d1a41322dd06c6063c5bd21f509f1daf69b",
+  "converterSource": "office-website 固定 sourceCommit 的 public/x2t-1（Brotli，沿用上游 _headers）",
+  "converterSha256": {
+    "x2t.js": "9710cc63098b20529d65f26ccfd6fc3b3c36c808220fb47728fcc70287d0daa9",
+    "x2t.wasm": "b15914a9cad355734503417a3b1e313971de73760ec34f5e698104250cbd023a"
+  },
+  "license": "AGPL-3.0",
+  "sourceArchive": "upstream-source.zip",
+  "installer": "scripts/install-office-assets.py",
+  "patchedFiles": [
+    "v9.3.0.24-1/web-apps/apps/spreadsheeteditor/main/index.html",
+    "v9.3.0.24-1/web-apps/apps/presentationeditor/main/index.html",
+    "v9.3.0.24-1/web-apps/apps/documenteditor/main/index.html",
+    "v9.3.0.24-1/web-apps/apps/api/documents/api.js"
+  ],
+  "changes": [
+    "远程 HTML base 改为本地单端口路径",
+    "预装子页自有只读通信桥，禁止父页写入 iframe DOM",
+    "DocsAPI 固定消息来源、窗口与目标来源",
+    "编辑器 iframe 关闭摄像头、麦克风与写剪贴板授权"
+  ],
+  "runtime": "Python 标准库单服务；浏览器本地 WebAssembly 转换；不运行 npm、Next.js 或远程文档服务"
+}

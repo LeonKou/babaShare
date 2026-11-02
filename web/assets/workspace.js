@@ -143,6 +143,7 @@
   }
   async function deleteWorkspace(target) {
     if (!(await UI.confirm(I18n.t("deleteWorkspaceConfirm", { name: target.workspaceName })))) return;
+    toast(I18n.t("processing"));
     try {
       await API("workspace", { method: "DELETE", query: { id: target.id } });
       workspaces = workspaces.filter((item) => item.id !== target.id);
@@ -159,8 +160,9 @@
       renderChrome();
       updateUrl();
       notifyChanged();
+      toast(I18n.t("success"), { kind: "success" });
     } catch (e) {
-      toast(errorText(e));
+      toast(errorText(e), { kind: "error" });
     }
   }
   async function selectWorkspace(id) {
@@ -207,7 +209,7 @@
     if (workspace?.canManage && workspace.canWrite)
       $("#workspace-head-actions").append(
         button("editWorkspace", () => editWorkspace(workspace), "", "edit"),
-        button("deleteWorkspace", () => deleteWorkspace(workspace), "danger"),
+        button("deleteWorkspace", () => deleteWorkspace(workspace), "danger", null, { showBusy: true }),
       );
     if (workspace?.canWrite)
       $("#workspace-head-actions").append(
@@ -258,7 +260,7 @@
             "footer",
             { onclick: (event) => event.stopPropagation() },
             button("editWorkspace", () => editWorkspace(w), "", "edit"),
-            button("deleteWorkspace", () => deleteWorkspace(w), "danger"),
+            button("deleteWorkspace", () => deleteWorkspace(w), "danger", null, { showBusy: true }),
           ) : null,
         );
       }),
@@ -281,7 +283,9 @@
     overwrite.checked = alwaysOverwrite;
     overwrite.addEventListener("change", () => { alwaysOverwrite = overwrite.checked; });
     details.append(
-      el("summary", { "aria-label": I18n.t("upload"), text: I18n.t("upload") }),
+      el("summary", { class: "primary", "aria-label": I18n.t("upload"),
+        "aria-disabled": String(uploading), tabindex: uploading ? "-1" : "0", text: I18n.t("upload"),
+        onclick: (event) => { if (uploading) event.preventDefault(); } }),
       el(
         "div",
         { class: "menu-popover" },
@@ -340,14 +344,17 @@
     closeRowMenu();
     const menu = el("div", { id: "file-action-menu", class: "workspace-row-popover", role: "menu",
       "aria-label": I18n.t("actions"), dir: I18n.ctx.dir });
-    for (const [key, action, cls] of [
-      ["rename", () => renameEntry(entry), ""],
-      ["delete", () => deleteEntry(entry), "danger"],
-    ]) {
+    const actions = [];
+    if (entry.kind !== "folder") actions.push(["previewDownload", () => downloadFile(entry), ""]);
+    if (entry.canWrite) {
+      if (entry.kind !== "folder" && isHtml(entry.name)) actions.push(["edit", () => editFile(entry), ""]);
+      actions.push(["rename", () => renameEntry(entry), ""], ["delete", () => deleteEntry(entry), "danger"]);
+    }
+    for (const [key, action, cls] of actions) {
       const item = button(key, () => {
         closeRowMenu(true);
-        Promise.resolve(action()).catch((e) => toast(errorText(e)));
-      }, cls);
+        return action();
+      }, cls, null, { showBusy: key === "delete" });
       item.setAttribute("role", "menuitem");
       item.tabIndex = -1;
       menu.append(item);
@@ -378,7 +385,7 @@
   }
   document.addEventListener("pointerdown", (event) => {
     if (activeMenu && !activeMenu.menu.contains(event.target) && !activeMenu.trigger.contains(event.target))
-      closeRowMenu();
+      closeRowMenu(true);
   });
   document.addEventListener("focusin", (event) => {
     if (activeMenu && !activeMenu.menu.contains(event.target) && event.target !== activeMenu.trigger)
@@ -424,16 +431,7 @@
           actions.append(
             iconButton("preview", () => previewFile(entry), "fullscreen"),
           );
-        if (entry.canWrite) {
-          if (html)
-            actions.append(iconButton("edit", () => editFile(entry), "edit"));
-          if (folder)
-            actions.append(
-              button("rename", () => renameEntry(entry), "", "edit"),
-              button("delete", () => deleteEntry(entry), "danger"),
-            );
-          else actions.append(rowActions(entry));
-        }
+        if (!folder || entry.canWrite) actions.append(rowActions(entry));
         return el(
           "tr",
           {},
@@ -541,7 +539,7 @@
       members = result;
       renderMembers();
     } catch (e) {
-      if (sequence === memberRequestId && workspace === target) toast(errorText(e));
+      if (sequence === memberRequestId && workspace === target) toast(errorText(e), { kind: "error" });
     }
   }
   function renderMembers() {
@@ -589,15 +587,15 @@
           { class: "menu-popover" },
           button("edit", () => {
             details.open = false;
-            editMember(member);
+            return editMember(member);
           }),
           button(
             "remove",
             () => {
               details.open = false;
-              removeMember(member);
+              return removeMember(member);
             },
-            "danger",
+            "danger", null, { showBusy: true },
           ),
         ),
       );
@@ -651,6 +649,7 @@
             const remove = button("delete", async () => {
               if (!(await UI.confirm(I18n.t("inviteDeleteConfirm")))) return;
               remove.disabled = true;
+              status.classList.remove("error");
               status.textContent = I18n.t("saving");
               list.setAttribute("aria-busy", "true");
               try {
@@ -658,9 +657,10 @@
                 invitations = invitations.filter((item) => item.id !== invitation.id);
                 render();
                 status.textContent = I18n.t("success");
-              } catch (error) { status.textContent = errorText(error); }
+                toast(I18n.t("success"), { kind: "success" });
+              } catch (error) { status.textContent = errorText(error); status.classList.add("error"); toast(errorText(error), { kind: "error" }); }
               finally { remove.disabled = false; list.setAttribute("aria-busy", "false"); }
-            }, "danger");
+            }, "danger", null, { showBusy: true });
             return el("article", { class: "card invitation-card" },
               el("header", {}, el("h3", { text: I18n.t(invitation.collaborate ? "collaborate" : "noCollaborate") }),
                 el("span", { class: "badge", text: I18n.t(invitation.isActive ? "active" : "expired") })),
@@ -704,14 +704,16 @@
   }
   async function removeMember(member) {
     if (await UI.confirm(I18n.t("removeMemberConfirm"))) {
+      toast(I18n.t("processing"));
       try {
         await API("member", {
           method: "DELETE",
           query: { workspaceId: workspace.id, userId: member.userId },
         });
+        toast(I18n.t("success"), { kind: "success" });
         await loadMembers();
       } catch (e) {
-        toast(errorText(e));
+        toast(errorText(e), { kind: "error" });
       }
     }
   }
@@ -796,7 +798,7 @@
       );
       if (result) await loadFiles();
     } catch (e) {
-      toast(errorText(e));
+      toast(errorText(e), { kind: "error" });
     }
   }
   async function renameEntry(entry) {
@@ -826,25 +828,36 @@
   }
   async function deleteEntry(entry) {
     if (await UI.confirm(I18n.t("deleteConfirm", { name: entry.name }))) {
+      toast(I18n.t("processing"));
       try {
         await API(entry.kind, {
           method: "DELETE",
           query: { workspaceId: workspace.id, path: entry.path },
         });
+        toast(I18n.t("success"), { kind: "success" });
         await loadFiles();
       } catch (e) {
-        toast(errorText(e));
+        toast(errorText(e), { kind: "error" });
       }
     }
   }
+  async function downloadFile(entry) {
+    const ticket = await API("ticket", {
+      method: "POST",
+      body: { workspaceId: workspace.id, path: parentPath(entry.path) },
+    });
+    const base = new URL(ticket.previewBaseUrl, location.href);
+    if (base.origin !== location.origin || !["http:", "https:"].includes(base.protocol) ||
+        !/^\/baba-share\/preview\/p\/[A-Za-z0-9_-]{43}\/$/.test(base.pathname) || base.search || base.hash)
+      throw new Error("ROUTE_NOT_ALLOWED");
+    const url = new URL(encodeURIComponent(entry.name), base);
+    url.searchParams.set("download", "1");
+    const link = el("a", { href: url.href, download: entry.name, hidden: "", rel: "noreferrer" });
+    document.body.append(link);
+    link.click();
+    link.remove();
+  }
   async function previewFile(entry) {
-    if (
-      !isHtml(entry.name) &&
-      !/\.(png|jpe?g|gif|svg|webp|txt|css|js|json|pdf)$/i.test(entry.name)
-    ) {
-      toast(I18n.t("previewUnsupported"));
-      return;
-    }
     try {
       const ticket = await API("ticket", {
         method: "POST",
@@ -854,9 +867,9 @@
         encodeURIComponent(entry.name),
         ticket.previewBaseUrl,
       );
-      await UI.preview(entry.name, url.href);
+      await FilePreview.open(entry.name, url.href, { size: entry.size });
     } catch (e) {
-      toast(errorText(e));
+      toast(errorText(e), { kind: "error" });
     }
   }
   const shareIsActive = (share) => share.revokedTime == null &&
@@ -894,7 +907,7 @@
       }
       await createShare(destination);
     } catch (e) {
-      toast(errorText(e));
+      toast(errorText(e), { kind: "error" });
     } finally {
       sharing = false;
     }
@@ -987,6 +1000,15 @@
     }
     uploading = true;
     $("#drop-zone").setAttribute("aria-busy", "true");
+    $("#file-actions").inert = true;
+    $("#file-actions").setAttribute("aria-busy", "true");
+    const uploadTrigger = $("#file-actions summary");
+    if (uploadTrigger) {
+      uploadTrigger.setAttribute("aria-disabled", "true");
+      uploadTrigger.tabIndex = -1;
+    }
+    const dropContent = Array.from($("#drop-zone").childNodes || $("#drop-zone").children);
+    $("#drop-zone").textContent = I18n.t("uploading", { current: 0, total: files.length });
     let failed = false, completed = false;
     const destination = { workspaceId: workspace.id, path,
       conflictPolicy: alwaysOverwrite ? "overwrite" : "ask" };
@@ -998,6 +1020,7 @@
           current: i + 1,
           total: files.length,
         });
+        $("#drop-zone").textContent = $("#file-status").textContent;
         payload.push({
           path: file.relativePath || file.webkitRelativePath || file.name,
           contentBase64: await fileBase64(file),
@@ -1011,13 +1034,21 @@
         result = await API("upload", { method: "POST", body: { ...body, conflictPolicy: policy } });
       }
       completed = !result.requiresConfirmation;
-      if (completed) toast(I18n.t("uploadDone"));
+      if (completed) toast(I18n.t("uploadDone"), { kind: "success" });
     } catch (e) {
       failed = true;
-      toast(errorText(e));
+      toast(errorText(e), { kind: "error" });
     } finally {
       uploading = false;
       $("#drop-zone").setAttribute("aria-busy", "false");
+      $("#drop-zone").replaceChildren(...dropContent);
+      $("#file-actions").inert = false;
+      $("#file-actions").setAttribute("aria-busy", "false");
+      const currentUploadTrigger = $("#file-actions summary");
+      if (currentUploadTrigger) {
+        currentUploadTrigger.setAttribute("aria-disabled", "false");
+        currentUploadTrigger.tabIndex = 0;
+      }
       if (completed) {
         $("#upload-input").value = "";
         $("#directory-input").value = "";
@@ -1101,7 +1132,7 @@
         : [...event.dataTransfer.files];
       await uploadFiles(files);
     } catch (e) {
-      toast(errorText(e));
+      toast(errorText(e), { kind: "error" });
     }
   });
   window.addEventListener("popstate", () => {

@@ -60,7 +60,8 @@
           "div",
           {},
           el("h3", { text: me.nickname }),
-          el("p", { class: "muted small", text: me.userName }),
+          el("p", { class: "muted small" }, I18n.t("accountName") + ": ",
+            el("bdi", { dir: "auto", text: me.userName })),
           el(
             "div",
             { class: "row small" },
@@ -118,7 +119,7 @@
             "footer",
             {},
             UI.copyButton("copyLink", () => UI.copy(share.shareUrl), "", "link"),
-            button("delete", () => deleteShare(share), "danger"),
+            button("delete", () => deleteShare(share), "danger", null, { showBusy: true }),
           ),
         );
       }),
@@ -134,9 +135,9 @@
       await API("share", { method: "DELETE", query: { id: share.id } });
       shares = shares.filter((s) => s.id !== share.id);
       render();
-      toast(I18n.t("success"));
+      toast(I18n.t("success"), { kind: "success" });
     } catch (e) {
-      toast(errorText(e));
+      toast(errorText(e), { kind: "error" });
     }
   }
   async function load() {
@@ -174,6 +175,7 @@
   let keys = [], keyBusy = false, keysLoaded = false, keyController = null, keyRequest = 0;
   const keyPager = (() => {
     let pageIndex = 1, pageSize = 10, busy = false;
+    const focus = PagerFocus($("#mcp-pagination"));
     const read = () => {
       const params = new URL(location.href).searchParams;
       pageIndex = Math.max(1, Math.floor(Number(params.get("mcpPageIndex")) || 1));
@@ -192,6 +194,7 @@
     window.addEventListener("popstate", () => { read(); renderKeys(); });
     return {
       slice(items) {
+        focus.capture();
         const pages = Math.max(1, Math.ceil(items.length / pageSize));
         const previousIndex = pageIndex;
         if (keysLoaded) pageIndex = Math.min(pageIndex, pages);
@@ -210,6 +213,7 @@
           el("div", { class: "row" }, previous,
             el("bdi", { class: "num", dir: "ltr", "aria-current": "page", text: I18n.t("page", { page: pageIndex, pages }) }), next));
         $("#mcp-pagination").setAttribute("aria-busy", String(busy));
+        focus.restore({ pageSize: select, previous, next }, busy);
         return items.slice((pageIndex - 1) * pageSize, pageIndex * pageSize);
       },
       reset() { pageIndex = 1; write(); },
@@ -229,7 +233,7 @@
     const selected = keys.filter((key) => filter === "all" || keyState(key) === filter);
     $("#mcp-cards").replaceChildren(...keyPager.slice(selected).map((key) => {
       const status = keyState(key);
-      const deleteButton = button("delete", () => deleteKey(key), "danger");
+      const deleteButton = button("delete", () => deleteKey(key), "danger", null, { showBusy: true });
       deleteButton.disabled = keyBusy;
       const copyButton = UI.copyButton("mcpCopyUse", () => {
         if (keyBusy || keyState(key) !== "active") return false;
@@ -289,17 +293,22 @@
   async function deleteKey(key) {
     if (keyBusy || !(await UI.confirm(I18n.t("mcpDeleteConfirm", { name: key.keyName })))) return;
     keyBusy = true;
+    $("#mcp-status").textContent = I18n.t("processing");
+    $("#mcp-cards").setAttribute("aria-busy", "true");
     renderKeys();
     try {
       await API("mcpKey", { method: "DELETE", query: { id: key.id } });
       keys = keys.filter((item) => item.id !== key.id);
       renderKeys();
       await loadKeys();
-      toast(I18n.t("success"));
+      toast(I18n.t("success"), { kind: "success" });
     } catch (error) {
-      toast(keyError(error));
+      $("#mcp-status").textContent = keyError(error);
+      $("#mcp-status").classList.add("error");
+      toast(keyError(error), { kind: "error" });
     } finally {
       keyBusy = false;
+      $("#mcp-cards").setAttribute("aria-busy", "false");
       renderKeys();
     }
   }
@@ -338,7 +347,7 @@
       const save = button("mcpCreate", () => {}, "primary");
       save.type = "submit";
       const cancel = button("cancel", () => close(null));
-      form.append(state, el("div", { class: "actions" }, cancel, save));
+      form.append(el("div", { class: "form-feedback" }, state, el("div", { class: "actions" }, cancel, save)));
       const random = new Uint8Array(24);
       crypto.getRandomValues(random);
       let requestId = Array.from(random, (value) => value.toString(16).padStart(2, "0")).join("");
@@ -359,7 +368,10 @@
         attempted = fingerprint;
         submitting = true;
         keyBusy = true;
-        save.disabled = cancel.disabled = true;
+        const restoreSave = UI.buttonBusy(save, true, "creating");
+        const editable = [...form.elements].filter((input) => input !== save && input !== cancel && !input.disabled);
+        editable.forEach((input) => { input.disabled = true; });
+        cancel.disabled = true;
         state.classList.remove("error");
         state.textContent = I18n.t("creating");
         form.setAttribute("aria-busy", "true");
@@ -367,10 +379,11 @@
         try {
           const result = await API("mcpKey", { method: "POST", body });
           close(null);
+          toast(I18n.t("success"), { kind: "success" });
           const keyId = result.id;
           delete result.key;
           keys.unshift(result);
-          await McpHelp.showCreated(keyId, (error) => toast(keyError(error)));
+          await McpHelp.showCreated(keyId, (error) => toast(keyError(error), { kind: "error" }));
           await loadKeys();
         } catch (error) {
           state.classList.add("error");
@@ -380,7 +393,9 @@
         } finally {
           submitting = false;
           keyBusy = false;
-          save.disabled = cancel.disabled = false;
+          restoreSave();
+          editable.forEach((input) => { input.disabled = false; });
+          cancel.disabled = false;
           form.setAttribute("aria-busy", "false");
           renderKeys();
         }

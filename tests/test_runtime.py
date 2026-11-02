@@ -363,6 +363,9 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(ignore.splitlines()[0], "**")
         self.assertNotIn("!data", ignore)
         self.assertNotIn("!.env", ignore)
+        self.assertIn("!web/vendor/", ignore.splitlines())
+        self.assertIn("!web/vendor/**", ignore.splitlines())
+        self.assertIn("COPY --chown=10001:10001 web/ ./web/", docker)
 
     def test_config_rejects_out_of_range_numeric_settings(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -8,9 +8,30 @@
     <link rel="stylesheet" href="assets/tokens.css" />
     <link rel="stylesheet" href="assets/components.css" />
     <link rel="stylesheet" href="assets/layout.css" />
+    <link rel="stylesheet" href="assets/preview.css" />
     <style>
+      .upload-menu > summary.primary {
+        background: var(--color-primary);
+        border-color: var(--color-primary);
+        color: var(--color-on-primary);
+      }
+      .upload-menu > summary.primary:hover:not([aria-disabled="true"]) {
+        filter: brightness(.92);
+      }
+      .upload-menu > summary.primary:active:not([aria-disabled="true"]) {
+        filter: brightness(.85);
+      }
+      .upload-menu > summary.primary[aria-disabled="true"] {
+        background: var(--color-menu-bg);
+        border-color: var(--color-border);
+        color: var(--color-menu-disabled-text);
+        cursor: not-allowed;
+      }
       .workspace-row-popover {
         position: fixed;
+        /* 与脚本测量后的物理视口坐标一致，初始原点避免测量前撑出滚动条。 */
+        top: 0;
+        left: 0;
         z-index: 40;
         display: flex;
         flex-direction: column;
@@ -19,12 +40,16 @@
         max-inline-size: calc(100vw - var(--space-4));
         max-block-size: calc(100dvh - var(--space-4));
         overflow-y: auto;
+        overflow-x: hidden;
         padding: var(--space-1);
         border: 1px solid var(--color-border);
         background: var(--color-menu-bg);
         color: var(--color-menu-text);
       }
       .workspace-row-popover button {
+        flex-shrink: 0;
+        block-size: 32px;
+        padding-inline: var(--space-3);
         justify-content: flex-start;
         border-color: transparent;
         background: transparent;
@@ -41,6 +66,10 @@
       .workspace-row-popover button:focus-visible {
         outline: 2px solid var(--color-border-focus);
         outline-offset: -2px;
+      }
+      .workspace-row-popover button:disabled {
+        color: var(--color-menu-disabled-text);
+        cursor: not-allowed;
       }
       .workspace-row-popover button.danger { color: var(--color-danger); }
     </style>
@@ -192,6 +221,7 @@
     <script src="assets/common.js"></script>
     <script src="assets/api.js"></script>
     <script src="assets/pagination.js"></script>
+    <script src="assets/preview.js"></script>
     <script src="assets/workspace.js"></script>
   </body>
 </html>

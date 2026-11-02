@@ -7,6 +7,7 @@
   let share = null;
   let currentFile = "";
   let previewBase = null;
+  let previewViewer = null;
   let loadingSequence = 0;
   const directoryCache = new Map();
   const shell = $("#share-shell");
@@ -94,7 +95,8 @@
     edge.hidden = !active;
     pointerInTree = false;
     setTreeOpen(active ? false : !normalTreeCollapsed);
-    (active ? $("#shared-frame") : fullscreen).focus();
+    if (active) previewViewer?.focus();
+    else fullscreen.focus();
   }
   function syncFullscreen() {
     const element = document.fullscreenElement;
@@ -122,6 +124,8 @@
   // Esc 由浏览器处理，沙箱原型持有焦点时父页也能正确恢复。
   document.addEventListener("fullscreenchange", syncFullscreen);
   function state(title, hint) {
+    previewViewer?.dispose();
+    previewViewer = null;
     $("#shared-frame").hidden = true;
     $("#share-state").hidden = false;
     $("#share-state").replaceChildren(
@@ -134,16 +138,17 @@
     if (
       !entry.path ||
       entry.path.split("/").some((part) => !part || part === "." || part === "..") ||
-      /[\\\x00]/.test(entry.path) ||
-      !/\.(html?|png|jpe?g|gif|svg|webp|txt|css|js|json|pdf)$/i.test(entry.name)
+      /[\\\x00]/.test(entry.path)
     ) {
       toast(I18n.t("previewUnsupported"));
       return;
     }
     currentFile = entry.path;
-    $("#shared-frame").src =
-      previewBase + entry.path.split("/").map(encodeURIComponent).join("/");
-    $("#shared-frame").hidden = false;
+    if (!previewViewer) previewViewer = FilePreview.create($("#share-stage"));
+    previewViewer.load({ ...entry,
+      url: previewBase + entry.path.split("/").map(encodeURIComponent).join("/"),
+    });
+    $("#shared-frame").hidden = true;
     $("#share-state").hidden = true;
     $("#share-current").textContent = entry.path;
     document

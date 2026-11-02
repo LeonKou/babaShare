@@ -252,7 +252,7 @@ const context={console,URL,AbortController,crypto:require('crypto').webcrypto,qu
     dialog:(title,build)=>{const node=el('dialog');let resolve;const result=new Promise(r=>resolve=r);const close=()=>{node.events.close?.();resolve(null);};dialogs.push({node,close,title});build(node,close);return{result,close};}},
   LocalPager:()=>({slice:x=>x,busy(){}}),addEventListener(){},removeEventListener(){}};
 context.window=context;vm.createContext(context);
-for(const file of ['i18n.js','api.js','mcp-help.js'])vm.runInContext(fs.readFileSync(input.assets+'/'+file,'utf8'),context);
+for(const file of ['i18n.js','api.js','pagination.js','mcp-help.js'])vm.runInContext(fs.readFileSync(input.assets+'/'+file,'utf8'),context);
 (async()=>{
   const source=fs.readFileSync(input.assets+'/account.js','utf8');
   const html=fs.readFileSync(input.assets+'/../account.html','utf8');

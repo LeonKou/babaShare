@@ -40,7 +40,34 @@ function realm({ stored = "{}", blocked = false, page = "account.html" } = {}) {
     removeAttribute(key) { delete this.attrs[key]; }
     focus() { document.activeElement = this; }
     contains(node) { return this === node || this.children.some((child) => child instanceof Element && child.contains(node)); }
-    querySelector() { return null; }
+    matches(selector) {
+      return selector.split(",").some((part) => {
+        part = part.trim();
+        if (part === ":disabled") return Boolean(this.disabled);
+        const exclusion = /:not\(([^)]+)\)/.exec(part);
+        if (exclusion) return this.matches(part.replace(exclusion[0], "")) && !this.matches(exclusion[1]);
+        const tag = /^([a-z][\w-]*)/i.exec(part);
+        if (tag && tag[1].toLowerCase() !== this.tag) return false;
+        for (const match of part.matchAll(/\[([\w-]+)(?:="?([^\]"]+)"?)?\]/g)) {
+          const value = ["hidden", "inert", "disabled", "open"].includes(match[1])
+            ? (this[match[1]] ? "" : undefined) : this.attrs[match[1]];
+          if (value === undefined || match[2] !== undefined && value !== match[2]) return false;
+        }
+        return Boolean(tag || part.startsWith("["));
+      });
+    }
+    closest(selector) { return this.matches(selector) ? this : this.parentNode?.closest(selector) || null; }
+    querySelectorAll(selector) {
+      const found = [];
+      for (const child of this.children) {
+        if (!(child instanceof Element)) continue;
+        if (child.matches(selector)) found.push(child);
+        found.push(...child.querySelectorAll(selector));
+      }
+      return found;
+    }
+    querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+    getClientRects() { return this.isConnected && !this.closest("[hidden]") && this.style.display !== "none" ? [{}] : []; }
     remove() {
       if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((child) => child !== this);
       this.parentNode = null;
@@ -102,7 +129,7 @@ function realm({ stored = "{}", blocked = false, page = "account.html" } = {}) {
   document.body = new Element("body");
   const title = new Element("strong");
   const context = {
-    document, URL, Promise, setTimeout, clearTimeout, queueMicrotask,
+    document, URL, Promise, setTimeout, clearTimeout, queueMicrotask, AbortController, TextDecoder, Uint8Array, Blob,
     FormData: class {
       constructor(form) {
         return form.elements.map((node) => [node.attrs.name, node.value]);
@@ -139,7 +166,7 @@ function controls(app) {
   return holder.children;
 }
 
-async function shell(app) {
+async function shell(app, role = "user") {
   for (const id of ["brand-home", "page-frame", "shell-controls", "new-workspace-icon", "logout-icon", "workspace-nav", "account-nav", "new-workspace", "shell-account", "logout", "new-workspace"]) {
     const node = new app.Element(id === "page-frame" ? "iframe" : "div");
     node.id = id;
@@ -149,13 +176,134 @@ async function shell(app) {
   app.run("common.js");
   app.context.API = async (name) => {
     if (name === "install") return { setupRequired: false };
-    if (name === "me") return { nickname: "测试", role: "user" };
+    if (name === "me") return { nickname: "测试", role };
     if (name === "workspaces") return [];
     throw new Error("不应写入业务数据 " + name);
   };
   await app.run("shell.js");
   return app.document.querySelector("#page-frame");
 }
+
+test("异步按钮处理中禁重复、失败恢复且确认取消不提示成功", async () => {
+  const app = realm(); app.run("common.js"); const { UI, I18n } = app.context;
+  let release, count = 0;
+  const control = UI.button("delete", () => { count++; return new Promise((resolve) => { release = resolve; }); }, "", null, { showBusy: true });
+  app.document.body.append(control);
+  const pending = control.fire("click");
+  assert.equal(control.disabled, true); assert.equal(control.getAttribute("aria-busy"), "true");
+  assert.equal(control.children[0].textContent, I18n.t("processing"));
+  control.fire("click"); assert.equal(count, 1);
+  const otherResource = UI.button("delete", () => { count++; }); otherResource.fire("click"); assert.equal(count, 2);
+  release(false); await pending;
+  assert.equal(control.disabled, false); assert.equal(control.getAttribute("aria-busy"), "false");
+  assert.equal(app.document.querySelector("#global-toast"), null);
+  const failed = UI.button("remove", async () => { throw { status: "PERMISSION_DENIED" }; });
+  await failed.fire("click");
+  assert.equal(Boolean(failed.disabled), false);
+  assert.equal(app.document.querySelector("#global-toast").dataset.kind, "error");
+});
+
+test("打开表单等待交互时不显示处理中且同按钮仍防重复打开", async () => {
+  const app = realm(); app.run("common.js"); const { UI, I18n } = app.context;
+  let release, opened = 0;
+  const control = UI.button("edit", () => { opened++; return new Promise((resolve) => { release = resolve; }); });
+  const original = control.textContent, originalChildren = [...control.children];
+  const pending = control.fire("click");
+  assert.equal(control.textContent, original);
+  assert.deepEqual(control.children, originalChildren);
+  assert.notEqual(control.getAttribute("aria-busy"), "true");
+  control.fire("click"); assert.equal(opened, 1);
+  release(null); await pending;
+  const again = control.fire("click"); assert.equal(opened, 2);
+  release(null); await again;
+});
+
+test("语义toast穿过真实iframe桥接到母版，dialog保持本地顶层并关闭后保留通知", async () => {
+  const host = realm({ page: "index.html" }); const frame = await shell(host, "admin");
+  const child = realm({ page: "settings.html" }); await attach(host, frame, child);
+  await child.context.UI.toast("服务器已保存", { kind: "success" });
+  const parentToast = host.document.querySelector("#global-toast");
+  assert.equal(parentToast.textContent, "服务器已保存"); assert.equal(parentToast.dataset.kind, "success");
+  assert.equal(child.document.querySelector("#global-toast"), null);
+  const popup = child.context.UI.dialog("测试表单", () => {});
+  child.context.UI.toast("权限不足", { kind: "error" });
+  const notice = child.document.querySelector("#global-toast");
+  assert.equal(notice.parentNode, popup.node); assert.equal(notice.dataset.kind, "error");
+  popup.close(null); assert.equal(notice.parentNode, child.document.body);
+  const next = child.context.UI.dialog("后续弹窗", () => {});
+  assert.equal(notice.parentNode, next.node); next.close(null);
+});
+
+test("共享表单等待防重复与Esc取消、失败保留草稿、成功关闭后明确反馈", async () => {
+  const app = realm(); app.run("common.js");
+  const { UI, I18n } = app.context; const states = [];
+  app.context.AppPage = { setDirty(value) { states.push(value); } };
+  let release, reject, calls = 0;
+  const result = UI.formDialog("编辑", [{ key: "name", value: "初始" }], () => { calls++; return new Promise((ok, fail) => { release = ok; reject = fail; }); }, { dirty: true });
+  const popup = app.nodes.findLast((node) => node.tag === "dialog"), form = popup.children[1];
+  const input = form.elements.namedItem("name"); input.value = "草稿"; form.fire("input");
+  const footer = form.children.at(-1), status = footer.children[0], save = footer.children[1].children[1];
+  const pending = form.fire("submit", { preventDefault() {} });
+  assert.equal(save.disabled, true); assert.equal(form.getAttribute("aria-busy"), "true");
+  assert.equal(status.textContent, I18n.t("saving"));
+  await form.fire("submit", { preventDefault() {} }); assert.equal(calls, 1);
+  let prevented = false; popup.fire("cancel", { preventDefault() { prevented = true; } }); assert.equal(prevented, true);
+  reject({ status: "PERMISSION_DENIED" }); await pending;
+  assert.equal(input.value, "草稿"); assert.equal(states.at(-1), true); assert.equal(popup.open, true);
+  assert.equal(status.textContent, I18n.t("permissionDenied")); assert.equal(save.disabled, false);
+  const retry = form.fire("submit", { preventDefault() {} }); release({ id: "saved" }); await retry;
+  assert.equal((await result).id, "saved"); assert.equal(states.at(-1), false); assert.equal(popup.open, false);
+  assert.equal(app.document.querySelector("#global-toast").dataset.kind, "success");
+  assert.equal(app.document.querySelector("#global-toast").parentNode, app.document.body);
+});
+
+test("真实直接写操作删除工作区/文件/成员/分享及启停用户仅服务器成功提示成功", async () => {
+  const cases = [
+    ["workspace.js", "deleteWorkspace", "selectWorkspace", "deleteWorkspace", { id: "w", workspaceName: "测试" }],
+    ["workspace.js", "deleteEntry", "previewFile", "delete", { path: "a.html", name: "a.html", kind: "file" }],
+    ["workspace.js", "removeMember", "newFolder", "remove", { userId: "member" }],
+    ["account.js", "deleteShare", "load", "delete", { id: "s" }],
+    ["users.js", "toggleUser", "load", "disableUser", { id: "u", nickname: "成员", isDisabled: false }],
+  ];
+  for (const [file, name, next, key, target] of cases) for (const outcome of ["success", "failure", "cancel"]) {
+    const app = realm(); app.run("common.js"); const ctx = app.context, notices = [], requests = [];
+    let release;
+    Object.assign(ctx, { target, workspaces: [target], workspace: { id: "workspace" }, members: [], entries: [], shares: [target], users: [target],
+      controller: null, requestId: 0, path: "", alwaysOverwrite: false,
+      render() {}, renderChrome() {}, updateUrl() {}, notifyChanged() {}, loadMembers: async () => {}, loadFiles: async () => {},
+      pager: { reset() {} }, I18n: ctx.I18n, toast: (message, options) => notices.push({ message, options }), errorText: ctx.UI.errorText,
+      API: async (route, options) => { requests.push({ route, options }); await new Promise((ok) => { release = ok; }); if (outcome === "failure") throw { status: "PERMISSION_DENIED" }; return { ...target, isDisabled: true }; } });
+    const userCards = app.document.createElement("div");
+    app.document.activeElement = app.document.body;
+    Object.assign(ctx, { $: (selector) => selector === "#user-cards" ? userCards : ctx.UI.$(selector) });
+    ctx.UI.confirm = async () => outcome !== "cancel";
+    const text = source(file); vm.runInContext(text.slice(text.indexOf("  async function " + name + "("), text.indexOf("  async function " + next + "(")), ctx);
+    const control = ctx.UI.button(key, () => ctx[name](target), "", null, { showBusy: true });
+    const pending = control.fire("click"); await flush(); if (outcome !== "cancel") control.fire("click");
+    assert.equal(requests.length, outcome === "cancel" ? 0 : 1, name + ": " + outcome);
+    if (outcome !== "cancel") { assert.equal(control.getAttribute("aria-busy"), "true"); assert.equal(notices.filter((notice) => notice.options?.kind === "success").length, 0); release(); }
+    await pending;
+    assert.equal(control.disabled, false);
+    assert.equal(notices.filter((notice) => notice.options?.kind === "success").length, outcome === "success" ? 1 : 0, name + ": " + outcome);
+    if (outcome === "failure") assert.equal(notices.at(-1).options.kind, "error");
+    if (outcome === "cancel") assert.equal(notices.length, 0);
+  }
+});
+
+test("管理员设置菜单与初始固定路由同步，非管理员无菜单且不能导航", async () => {
+  const admin = realm({ page: "index.html?route=settings" });
+  const frame = await shell(admin, "admin");
+  assert.equal(new URL(frame.src).pathname, "/baba-share/settings.html");
+  const menu = admin.document.querySelector("#account-nav");
+  const settings = menu.children.find((node) => node.attrs["aria-label"] === admin.context.I18n.t("settings"));
+  assert(settings); assert.equal(settings.attrs["aria-current"], "page");
+  assert.equal(new URL(admin.context.UI.routeUrl("settings")).pathname, "/baba-share/settings.html");
+  assert.throws(() => admin.context.UI.routeUrl("https://evil.invalid"), /ROUTE_NOT_ALLOWED/);
+  const viewer = realm({ page: "index.html?route=settings" });
+  const deniedFrame = await shell(viewer, "viewer");
+  assert.equal(deniedFrame.src, undefined);
+  assert.equal(viewer.document.querySelector("#account-nav").children.some((node) => node.attrs["aria-label"] === viewer.context.I18n.t("settings")), false);
+});
 
 async function attach(host, frame, child, wire = {}) {
   wire.child = child;
@@ -358,9 +506,10 @@ test("真实登录与分享脚本执行换色，不向原型沙箱发送上下�
     app.run("common.js");
     app.context.API = async (name) => {
       if (name === "install") return { setupRequired: false, registrationEnabled: false };
-      if (name === "shareDetail") return { share: { expireTime: null }, previewBaseUrl: "/baba-share/preview/test/", listing: { entries: [], pageIndex: 1, totalPage: 1, totalCount: 0, entryPath: "index.html" } };
+      if (name === "shareDetail") return { share: { expireTime: null }, previewBaseUrl: "/baba-share/preview/s/test/", listing: { entries: [], pageIndex: 1, totalPage: 1, totalCount: 0, entryPath: "index.html" } };
       throw new Error("不应写入业务数据 " + name);
     };
+    if (page === "share") app.run("preview.js");
     await app.run(page + ".js");
     const holder = app.document.querySelector(page === "auth" ? "#auth-settings" : "#share-controls");
     const accent = holder.children.find((node) => node.dataset?.i18nLabel === "accent");
@@ -370,7 +519,11 @@ test("真实登录与分享脚本执行换色，不向原型沙箱发送上下�
     assert.equal(app.snapshot().accent, "purple");
     assert.equal(JSON.parse(app.writes.at(-1)[1]).accent, "purple");
     assert.equal(messages, 0);
-    if (frame) assert.equal(frame.src, "/baba-share/preview/test/index.html");
+    if (frame) {
+      const rendered = app.nodes.findLast((node) => node.tag === "iframe");
+      assert.equal(rendered.src, "http://127.0.0.1/baba-share/preview/s/test/index.html");
+      assert.equal(rendered.attrs.sandbox, "allow-scripts");
+    }
     assert.equal(app.warnings.length, 0);
   }
 });
@@ -411,9 +564,13 @@ async function sharePreview(mode = "native") {
   app.run("common.js");
   app.context.API = async (name) => {
     assert.equal(name, "shareDetail");
-    return { share: { expireTime: null }, previewBaseUrl: "/baba-share/preview/test/", listing: { entries: [{ name: "index.html", path: "index.html", kind: "file" }, { name: "other.html", path: "other.html", kind: "file" }], pageIndex: 1, totalPage: 1, totalCount: 2, entryPath: "index.html" } };
+    return { share: { expireTime: null }, previewBaseUrl: "/baba-share/preview/s/test/", listing: { entries: [{ name: "index.html", path: "index.html", kind: "file" }, { name: "other.html", path: "other.html", kind: "file" }], pageIndex: 1, totalPage: 1, totalCount: 2, entryPath: "index.html" } };
   };
+  app.run("preview.js");
   await app.run("share.js");
+  app.currentFrame = () => app.nodes.findLast((node) => node.tag === "iframe");
+  Object.defineProperty(app.currentFrame(), "contentDocument", { get() { throw new Error("禁止读取原型DOM"); } });
+  app.currentFrame().contentWindow = { postMessage() { throw new Error("禁止向原型注入消息"); } };
   app.get = get;
   app.fullscreen = get("preview-actions").children[0];
   app.toggle = get("share-controls").children[0];
@@ -477,7 +634,8 @@ test("原生全屏缺失、Promise拒绝或同步抛错均留在普通预览并�
     assert.equal(app.exit, undefined);
     assert.equal(app.edge.hidden, true);
     assert(app.isTreeOpen());
-    assert.equal(app.get("shared-frame").src, "/baba-share/preview/test/index.html");
+    assert.equal(app.currentFrame().src, "http://127.0.0.1/baba-share/preview/s/test/index.html");
+    assert.equal(app.currentFrame().attrs.sandbox, "allow-scripts");
     assert.equal(app.document.querySelector("#global-toast").textContent, app.context.I18n.t("fullscreenUnavailable"));
     assert.equal(app.fullscreen.disabled || false, false);
     assert.equal(app.counts().exits, 0);
@@ -540,7 +698,10 @@ test("触屏点击与键盘目录开关保持全屏、隐藏焦点回入口，�
   item.focus();
   item.fire("click");
   assert(app.isImmersive());
-  assert.equal(app.get("shared-frame").src, "/baba-share/preview/test/other.html");
+  const previous = app.nodes.filter((node) => node.tag === "iframe").at(-2);
+  assert.equal(previous.src, "about:blank", "切换必须停止旧原型");
+  assert.equal(app.currentFrame().src, "http://127.0.0.1/baba-share/preview/s/test/other.html");
+  assert.equal(app.currentFrame().attrs.sandbox, "allow-scripts");
   assert.deepEqual(app.counts(), { requests: 1, exits: 0 });
   app.edge.fire("click");
   assert(!app.isTreeOpen());
@@ -711,7 +872,7 @@ test("分享和邀请所有复制入口使用公共状态按钮且反馈预留�
   assert(account.includes('UI.copyButton("copyLink", () => UI.copy(share.shareUrl)'));
   assert(account.includes('UI.copyButton("mcpCopyUse"'));
   assert(css.includes('grid-area:1/1'));
-  assert(css.includes('dialog>.toast{position:sticky'));
+  assert(css.includes('dialog>.toast{position:fixed'));
 });
 
 test("品牌使用固定原生首页链接，成员邀请按钮同高留距且邀请删除仅在本卡底部铺满", () => {

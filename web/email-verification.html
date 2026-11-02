@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN" dir="ltr" data-mode="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>babaShare · 邮箱验证</title>
+    <script src="assets/email-verification.js"></script>
+    <script src="assets/boot.js"></script>
+    <link rel="stylesheet" href="assets/tokens.css" />
+    <link rel="stylesheet" href="assets/components.css" />
+    <link rel="stylesheet" href="assets/layout.css" />
+  </head>
+  <body class="auth-body">
+    <div class="auth-settings" id="verification-settings"></div>
+    <main class="auth-panel">
+      <section>
+        <h1 data-i18n="emailVerification">邮箱验证</h1>
+        <p class="auth-intro" data-i18n="emailVerificationHint">请在发起操作的同一浏览器中登录对应账户，再主动确认邮箱；打开邮件链接不会直接修改账户。</p>
+        <p id="verification-identity" class="form-note"></p>
+        <form id="verification-login" novalidate hidden>
+          <h2 data-i18n="login">登录</h2>
+          <p class="form-note" data-i18n="required">带 * 的字段为必填项。</p>
+          <div id="verification-login-fields"></div>
+          <button type="submit" class="primary" id="verification-login-submit" data-i18n="login">登录</button>
+        </form>
+        <form id="verification-form" novalidate hidden>
+          <div id="verification-fields"></div>
+          <button type="submit" class="primary" id="verification-submit" data-i18n="confirmEmail">确认邮箱</button>
+        </form>
+        <div id="verification-status" class="status-line" role="status" aria-live="polite"></div>
+        <div id="verification-retry"></div>
+        <p><a href="account.html" data-i18n="account">个人中心</a></p>
+      </section>
+    </main>
+    <script src="assets/i18n.js"></script>
+    <script src="assets/common.js"></script>
+    <script src="assets/api.js"></script>
+  </body>
+</html>

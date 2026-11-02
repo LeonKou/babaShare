@@ -184,7 +184,7 @@ class BackendTests(unittest.TestCase):
 
     def test_setup_registration_and_cookie(self):
         status, detail, _ = self.request("GET", "/visitor/install/detail", origin=False)
-        self.assertEqual((status, detail), (200, {"setupRequired": False, "registrationEnabled": False}))
+        self.assertEqual((status, detail), (200, {"setupRequired": False, "registrationEnabled": False, "emailRegistrationEnabled": False}))
         status, _, _ = self.request("POST", "/visitor/account/setup", {"userName": "other", "password": "password-123"})
         self.assertEqual(status, 409)
         status, _, _ = self.request("POST", "/visitor/account/registration", {"userName": "signup", "password": "password-123", "role": "admin"})
@@ -192,12 +192,50 @@ class BackendTests(unittest.TestCase):
         self.request("PATCH", "/setting", {"registrationEnabled": True}, self.admin_cookie)
         status, user, headers = self.request("POST", "/visitor/account/registration", {"userName": "signup", "password": "password-123", "role": "admin"})
         self.assertEqual(status, 200)
-        self.assertEqual(user["role"], "viewer")
+        self.assertEqual(user["role"], "editor")
         cookie = headers["Set-Cookie"]
         self.assertIn("HttpOnly", cookie)
         self.assertIn("SameSite=Strict", cookie)
         self.assertIn("Path=" + BASE, cookie)
         self.assertNotIn("password", user)
+
+    def test_public_registration_always_editor_with_workspace_but_no_admin_settings(self):
+        from backend.service import Service
+        existing, _ = self.add_user("existing-viewer", "viewer")
+        before = self.app.service.repo.user(existing["id"])
+        self.assertEqual(self.admin["role"], "admin")
+        self.assertEqual(self.request("PATCH", "/setting", {"registrationEnabled": True}, self.admin_cookie)[0], 200)
+        for role in (None, "admin", "viewer"):
+            with self.subTest(role=role):
+                name = "signup-" + (role or "default")
+                body = {"userName": name, "password": "password-123"}
+                if role is not None:
+                    body["role"] = role
+                status, user, headers = self.request("POST", "/visitor/account/registration", body)
+                self.assertEqual((status, user["role"]), (200, "editor"))
+                self.assertEqual(self.app.service.repo.user(user["id"])["user_role"], "editor")
+                cookie = headers["Set-Cookie"].split(";", 1)[0]
+                self.assertEqual(self.request("GET", "/session/detail", cookie=cookie)[1]["role"], "editor")
+                workspace_id = self.workspace(cookie, name)
+                self.assertEqual(self.app.service.repo.workspace(workspace_id)["owner_id"], user["id"])
+                for method, route, settings in (("GET", "/setting/detail", None),
+                                                 ("PATCH", "/setting", {"registrationEnabled": False}),
+                                                 ("GET", "/mail-setting/detail", None),
+                                                 ("PATCH", "/mail-setting", {"host": "smtp.example.com"})):
+                    status, error, _ = self.request(method, route, settings, cookie)
+                    self.assertEqual((status, error["status"]), (403, "PERMISSION_DENIED"))
+        self.assertEqual(Service(self.config).repo.user(existing["id"]), before)
+        self.assertTrue(self.app.service.install_detail()["registrationEnabled"])
+
+    def test_admin_created_accounts_keep_explicit_roles_and_existing_default(self):
+        for role in (None, "admin", "editor", "viewer"):
+            with self.subTest(role=role):
+                body = {"userName": "created-" + (role or "default"), "password": "password-123"}
+                if role is not None:
+                    body["role"] = role
+                status, user, _ = self.request("POST", "/user", body, self.admin_cookie)
+                self.assertEqual((status, user["role"]), (200, role or "viewer"))
+                self.assertEqual(self.app.service.repo.user(user["id"])["user_role"], role or "viewer")
 
     def test_password_hash_and_setup_length_boundaries(self):
         from backend.service import BizError, Service, password_hash, password_valid
@@ -341,6 +379,97 @@ vm.runInContext(source.slice(source.indexOf('  async function createUser()'),sou
 '''
         result = subprocess.run(["node", "-e", script, str(self.config.web_dir / "assets")], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_user_edit_all_business_fields_and_readonly_audit(self):
+        user, cookie = self.add_user("edit-business")
+        before = self.app.service.repo.user(user["id"])
+        status, updated, _ = self.request("PATCH", "/user", {
+            "id": user["id"], "userName": "new+account@example.com", "nickname": "新名称",
+            "role": "viewer", "isDisabled": False, "password": "",
+        }, self.admin_cookie)
+        self.assertEqual(status, 200, updated)
+        self.assertEqual(set(updated), {"id", "userName", "nickname", "role", "isDisabled", "email", "emailVerified", "createTime", "updateTime"})
+        self.assertEqual((updated["userName"], updated["nickname"], updated["role"], updated["isDisabled"]),
+                         ("new+account@example.com", "新名称", "viewer", False))
+        after = self.app.service.repo.user(user["id"])
+        self.assertEqual(after["password_hash"], before["password_hash"])
+        self.assertEqual(updated["createTime"], before["create_time"])
+        self.assertIsInstance(updated["updateTime"], int)
+        self.assertGreaterEqual(updated["updateTime"], before["update_time"])
+        self.assertEqual(self.request("GET", "/session/detail", cookie=cookie)[1]["role"], "viewer")
+        self.assertEqual(self.request("POST", "/visitor/session", {"userName": "edit-business", "password": "password-123"})[0], 401)
+        self.assertEqual(self.request("POST", "/visitor/session", {"userName": updated["userName"], "password": "password-123"})[0], 200)
+        for key, value in (("createTime", 0), ("updateTime", 0), ("password_hash", "secret"), ("user_role", "admin")):
+            with self.subTest(key=key):
+                status, error, _ = self.request("PATCH", "/user", {"id": user["id"], key: value}, self.admin_cookie)
+                self.assertEqual((status, error["status"]), (400, "PARAM_INVALID"))
+        self.assertEqual(self.app.service.repo.user(user["id"]), after)
+        self.assertEqual(self.request("GET", "/user/list", cookie=self.admin_cookie)[1][-1], updated)
+
+    def test_user_edit_validation_conflict_and_long_email(self):
+        user, cookie = self.add_user("edit-validation")
+        before = self.app.service.repo.user(user["id"])
+        for field, values in {
+            "userName": [None, 3, [], {}, "", "ab", "bad name", "a" * 65, "a+bad", "a+@invalid", "x" * 255],
+            "nickname": [None, 3, [], {}, "", "   ", "x" * 65],
+            "role": [None, [], {}, True, "unknown"],
+            "isDisabled": [None, 0, 1, "false", [], {}],
+            "password": [None, False, 123456, [], {}, "12345", "x" * 257],
+        }.items():
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    status, error, _ = self.request("PATCH", "/user", {"id": user["id"], field: value}, self.admin_cookie)
+                    self.assertEqual((status, error["status"]), (400, "PARAM_INVALID"))
+                    self.assertEqual(self.app.service.repo.user(user["id"]), before)
+        status, error, _ = self.request("PATCH", "/user", {"id": user["id"], "userName": "ADMIN", "password": "changed-pass"}, self.admin_cookie)
+        self.assertEqual((status, error["status"]), (409, "USER_EXISTS"))
+        self.assertEqual(set(error), {"code", "status", "msg"})
+        self.assertEqual(self.app.service.repo.user(user["id"]), before)
+        self.assertEqual(self.request("GET", "/session/detail", cookie=cookie)[0], 200)
+        email = "a+" + "b" * 62 + "@" + "c" * 63 + "." + "d" * 63 + "." + "e" * 61
+        self.assertEqual(len(email), 254)
+        status, updated, _ = self.request("PATCH", "/user", {"id": user["id"], "userName": email, "nickname": "x" * 64}, self.admin_cookie)
+        self.assertEqual((status, updated["userName"]), (200, email))
+        self.assertEqual(self.request("POST", "/visitor/session", {"userName": email.upper(), "password": "password-123"})[0], 200)
+        self.assertEqual(self.request("PATCH", "/user", {"id": user["id"], "nickname": "no"}, cookie)[0], 403)
+
+    def test_user_password_reset_revokes_every_session_and_self(self):
+        user, cookie = self.add_user("reset-target")
+        second = self.request("POST", "/visitor/session", {"userName": user["userName"], "password": "password-123"})[2]["Set-Cookie"].split(";", 1)[0]
+        status, updated, _ = self.request("PATCH", "/user", {"id": user["id"], "password": "x" * 256}, self.admin_cookie)
+        self.assertEqual(status, 200, updated)
+        for old_cookie in (cookie, second):
+            self.assertEqual(self.request("GET", "/session/detail", cookie=old_cookie)[0], 401)
+        self.assertEqual(self.request("POST", "/visitor/session", {"userName": user["userName"], "password": "password-123"})[0], 401)
+        self.assertEqual(self.request("POST", "/visitor/session", {"userName": user["userName"], "password": "x" * 256})[0], 200)
+        self.assertEqual(self.request("PATCH", "/user", {"id": self.admin["id"], "password": "new-admin-pass"}, self.admin_cookie)[0], 200)
+        self.assertEqual(self.request("GET", "/session/detail", cookie=self.admin_cookie)[0], 401)
+        self.assertEqual(self.request("POST", "/visitor/session", {"userName": "admin", "password": "new-admin-pass"})[0], 200)
+
+    def test_user_last_admin_and_disabled_admin_edits(self):
+        for patch, expected in (({"role": "viewer"}, "LAST_ADMIN"), ({"isDisabled": True}, "SELF_DISABLE_FORBIDDEN")):
+            status, error, _ = self.request("PATCH", "/user", {"id": self.admin["id"], **patch}, self.admin_cookie)
+            self.assertEqual((status, error["status"]), (409, expected))
+        other, _ = self.add_user("other-admin", "admin")
+        self.assertEqual(self.request("PATCH", "/user", {"id": other["id"], "isDisabled": True}, self.admin_cookie)[0], 200)
+        self.assertEqual(self.request("PATCH", "/user", {"id": other["id"], "nickname": "禁用管理员资料"}, self.admin_cookie)[0], 200)
+        self.assertEqual(self.request("PATCH", "/user", {"id": other["id"], "role": "viewer"}, self.admin_cookie)[0], 200)
+        status, error, _ = self.request("PATCH", "/user", {"id": self.admin["id"], "isDisabled": True}, self.admin_cookie)
+        self.assertEqual((status, error["status"]), (409, "SELF_DISABLE_FORBIDDEN"))
+
+    def test_user_self_disable_always_rejected_but_nonlast_self_demotion_allowed(self):
+        other, cookie = self.add_user("self-admin", "admin")
+        before = self.app.service.repo.user(other["id"])
+        status, error, _ = self.request("PATCH", "/user", {"id": other["id"], "isDisabled": True, "nickname": "不应写入"}, cookie)
+        self.assertEqual((status, error["status"]), (409, "SELF_DISABLE_FORBIDDEN"))
+        self.assertEqual(self.app.service.repo.user(other["id"]), before)
+        self.assertEqual(self.request("GET", "/session/detail", cookie=cookie)[0], 200)
+        status, updated, _ = self.request("PATCH", "/user", {"id": other["id"], "role": "viewer"}, cookie)
+        self.assertEqual((status, updated["role"]), (200, "viewer"))
+        self.assertEqual(self.request("GET", "/user/list", cookie=cookie)[0], 403)
+        self.assertEqual(self.request("GET", "/session/detail", cookie=cookie)[1]["role"], "viewer")
+        self.assertEqual(self.app.service.repo.user(other["id"])["id"], before["id"])
+        self.assertEqual(self.app.service.repo.user(self.admin["id"])["user_role"], "admin")
 
     def test_login_logout_disable_and_last_admin(self):
         status, result, _ = self.request("POST", "/visitor/session", {"userName": "admin", "password": "bad"})
@@ -889,7 +1018,7 @@ let source=fs.readFileSync(process.argv[1]+'/workspace.js','utf8').replace('  aw
   for(const target of ['article','description','date','link']){t.pick([w]);const current=$('#workspace-cards').children[0],node=target==='article'?current:target==='description'?current.children[1]:target==='date'?current.children[2]:current.querySelectorAll('a')[0];count=calls.length;assert.equal((await node.click()).defaultPrevented,true);assert.equal($('#file-browser').hidden,false);assert.equal(context.location.searchParams.get('workspaceId'),'space');assert.deepEqual(calls.slice(count).map(c=>c.name).sort(),['members','nodes']);}
   for(const permissions of [{canManage:false,canWrite:false},{canManage:false,canWrite:true},{canManage:true,canWrite:false}]){t.pick([{...w,...permissions}]);const current=$('#workspace-cards').children[0];assert.equal(current.querySelectorAll('button').length,0);assert.equal(current.querySelectorAll('footer').length,0);await current.querySelectorAll('a')[0].click();assert.equal($('#file-browser').hidden,false);assert(!flatten($('#workspace-head-actions')).some(n=>['editWorkspace','deleteWorkspace'].includes(n.textContent)));}
  }
- const css=fs.readFileSync(process.argv[1]+'/components.css','utf8'),cardRule=css.match(/\.card\{([^}]+)\}/)[1],footerRule=css.match(/\.card>footer\{([^}]+)\}/)[1],workspaceFooter=css.match(/\.card\.workspace-card>footer\{([^}]+)\}/)[1];for(const value of ['display:flex','flex-direction:column','min-inline-size:0','overflow-wrap:anywhere'])assert(cardRule.includes(value));for(const value of ['margin-block-start:auto','flex-shrink:0','flex-wrap:wrap'])assert(footerRule.includes(value));assert(workspaceFooter.includes('justify-content:space-between'));assert(workspaceFooter.includes('margin-block-start:auto'));assert(css.includes('.workspace-card>footer>button:last-child{margin-inline-start:auto}'));assert(css.includes('.workspace-card-link:focus-visible{outline:2px solid var(--color-border-focus)'));assert(!/position:(absolute|fixed)/.test(workspaceFooter));
+ const css=fs.readFileSync(process.argv[1]+'/components.css','utf8'),cardRule=css.match(/\.card\{([^}]+)\}/)[1],footerRule=css.match(/\.card>footer\{([^}]+)\}/)[1],workspaceFooter=css.match(/\.card\.workspace-card>footer\{([^}]+)\}/)[1];for(const value of ['display:flex','flex-direction:column','min-inline-size:0','overflow-wrap:anywhere'])assert(cardRule.includes(value));for(const value of ['margin-block-start:auto','flex-shrink:0','flex-wrap:wrap'])assert(footerRule.includes(value));assert(footerRule.includes('justify-content:flex-end'));assert(footerRule.includes('align-items:flex-end'));assert(!/justify-content|align-items/.test(workspaceFooter));assert(css.includes('.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr));gap:var(--space-3);align-items:stretch}'));assert(css.includes('.workspace-card-link:focus-visible{outline:2px solid var(--color-border-focus)'));assert(!/position:(absolute|fixed)/.test(workspaceFooter));
  t.set(w);formValues={collaborate:'false',expireHours:'168'};await t.inviteMember();let invitation=calls.find(c=>c.name==='invitation');assert.equal(invitation.method,'POST');assert.equal(invitation.body.collaborate,false);assert.equal(invitation.body.expireHours,168);assert.equal(invitation.body.workspaceId,'space');assert.equal(typeof invitation.body.requestId,'string');assert(!forms.at(-1).some(f=>f.name==='userName'));assert(flatten(dialogs.at(-1).node).some(n=>n.value==='http://localhost/baba-share/invite.html#invite='+'a'.repeat(43)));
  await t.manageInvitations();assert(calls.some(c=>c.name==='invitations'&&c.query.workspaceId==='space'));assert.equal(dialogs.at(-1).title,context.I18n.t('inviteManage'));const inviteGrid=flatten(dialogs.at(-1).node).find(n=>n.attrs.class==='cards invitation-cards');assert(inviteGrid);const inviteCard=inviteGrid.children[0];assert.equal(inviteCard.attrs.class,'card invitation-card');assert.equal(inviteCard.children.at(-1).tag,'footer');assert.equal(inviteCard.children.at(-1).children.length,1);let removeInvite=flatten(dialogs.at(-1).node).find(n=>n.textContent==='delete');confirm=false;let beforeDelete=calls.length;await removeInvite.fn();assert.equal(calls.length,beforeDelete);confirm=true;await removeInvite.fn();assert(calls.some(c=>c.name==='invitation'&&c.method==='DELETE'&&c.query.id==='invite-row'));dialogs=[];
  t.set(w,'folder');shares=[{id:'valid',workspaceId:'space',path:'folder',shareUrl:'existing-link',expireTime:null,createTime:1},{id:'valid2',workspaceId:'space',path:'folder',shareUrl:'second-link',expireTime:Date.now()+60000,createTime:2},{id:'expired',workspaceId:'space',path:'folder',expireTime:Date.now()-1},{id:'revoked',workspaceId:'space',path:'folder',revokedTime:1},{id:'other',workspaceId:'space',path:'folder-child'},{id:'other-space',workspaceId:'else',path:'folder'}];
@@ -899,11 +1028,17 @@ let source=fs.readFileSync(process.argv[1]+'/workspace.js','utf8').replace('  aw
  shares=shares.filter(s=>s.id==='expired'||s.id==='revoked');await t.shareFolder();assert.equal(calls.filter(c=>c.name==='share').length,2);
  t.set(w);formValues={workspaceName:'Renamed',description:'new'};await t.editWorkspace(w);assert(calls.some(c=>c.name==='workspace'&&c.method==='PATCH'&&c.body.id==='space'));assert.equal($('#workspace-title').textContent,'Renamed');
  confirm=false;const count=calls.length;await t.deleteWorkspace(w);assert.equal(calls.length,count);confirm=true;await t.deleteWorkspace(w);assert(calls.some(c=>c.name==='workspace'&&c.method==='DELETE'&&c.query.id==='space'));assert.equal($('#file-browser').hidden,true);
- const folder={name:'folder',path:'folder',kind:'folder',canWrite:true},file={name:'a.txt',path:'a.txt',kind:'file',canWrite:true};t.set(w,'',[folder,file]);t.renderFiles();assert(flatten($('#file-list')).some(n=>n.textContent==='rename'));assert(flatten($('#file-list')).some(n=>n.textContent==='delete'));
- const trigger=t.rowActions(file);document.body.append(trigger);context.I18n.apply({locale:'ar-SA',theme:'dark'});t.openRowMenu(trigger,file);let menu=t.menu().menu;assert.equal(menu.parentElement,document.body);assert.equal(menu.attrs.role,'menu');assert.equal(menu.attrs.dir,'rtl');assert(Number.parseFloat(menu.style.left)<=152);assert(Number.parseFloat(menu.style.top)>=8);assert.equal(trigger.attrs['aria-expanded'],'true');
+ const folder={name:'folder',path:'folder',kind:'folder',canWrite:true},file={name:'a.txt',path:'a.txt',kind:'file',canWrite:true},html={name:'index.html',path:'index.html',kind:'file',canWrite:true};t.set(w,'',[folder,file,html]);t.renderFiles();
+ const rowActionsAt=index=>$('#file-list').children[index].children.at(-1).children[0];
+ assert(!flatten($('#file-list')).some(n=>['previewDownload','edit','rename','delete'].includes(n.textContent)));
+ for(const [index,expected] of [[0,['rename','delete']],[1,['previewDownload','rename','delete']],[2,['previewDownload','edit','rename','delete']]]){
+  const actions=rowActionsAt(index),buttons=actions.children;assert.equal(buttons.length,index===0?1:2);assert.equal(buttons.at(-1).textContent,'…');assert.equal(buttons.at(-1).attrs['aria-label'],context.I18n.t('actions'));if(index!==0)assert.equal(buttons[0].attrs['aria-label'],context.I18n.t('preview'));
+  await buttons.at(-1).click();assert.deepEqual(t.menu().menu.children.map(n=>n.textContent),expected);assert(!flatten($('#file-list')).some(n=>['previewDownload','edit','rename','delete'].includes(n.textContent)));document.events.keydown({key:'Escape',preventDefault(){}});assert.equal(t.menu(),null);assert.equal(document.activeElement,buttons.at(-1));assert.equal(buttons.at(-1).attrs['aria-expanded'],'false');
+ }
+ context.I18n.apply({locale:'ar-SA',theme:'dark'});const trigger=rowActionsAt(1).children.at(-1);await trigger.click();let menu=t.menu().menu;assert.equal(menu.parentElement,document.body);assert.equal(menu.attrs.role,'menu');assert.equal(menu.attrs.dir,'rtl');assert(Number.parseFloat(menu.style.left)<=152);assert(Number.parseFloat(menu.style.top)>=8);assert.equal(trigger.attrs['aria-expanded'],'true');
  let prevented=false;menu.events.keydown({key:'End',preventDefault(){prevented=true;}});assert(prevented);assert.equal(document.activeElement.textContent,'delete');document.events.keydown({key:'Escape',preventDefault(){}});assert.equal(t.menu(),null);assert.equal(document.activeElement,trigger);
  t.openRowMenu(trigger,file);document.events.pointerdown({target:new Node('outside')});assert.equal(t.menu(),null);t.openRowMenu(trigger,file);document.events.scroll({target:document});assert.equal(t.menu(),null);t.openRowMenu(trigger,file);document.events.keydown({key:'Tab'});assert.equal(t.menu(),null);t.openRowMenu(trigger,file);t.renderFiles();assert.equal(t.menu(),null);
- t.set({...w,canManage:false,canWrite:false},'',[{...folder,canWrite:false},{...file,canWrite:false}]);t.renderChrome();t.renderFiles();assert.equal($('#workspace-head-actions').children.length,0);assert(!flatten($('#file-list')).some(n=>n.textContent==='delete'));
+ t.set({...w,canManage:false,canWrite:false},'',[{...folder,canWrite:false},{...file,canWrite:false}]);t.renderChrome();t.renderFiles();assert.equal($('#workspace-head-actions').children.length,0);assert(!flatten($('#file-list')).some(n=>['edit','rename','delete'].includes(n.textContent)));assert.equal(rowActionsAt(0).children.length,0);const readonlyActions=rowActionsAt(1);assert.equal(readonlyActions.children.length,2);assert.equal(readonlyActions.children[0].attrs['aria-label'],context.I18n.t('preview'));await readonlyActions.children.at(-1).click();assert.deepEqual(t.menu().menu.children.map(n=>n.textContent),['previewDownload']);document.events.keydown({key:'Escape',preventDefault(){}});assert.equal(t.menu(),null);assert.equal(document.activeElement,readonlyActions.children.at(-1));
  process.stdout.write('工作区分享选择、管理权限、删除确认、菜单键盘及RTL执行通过');
 })().catch(e=>{console.error(e);process.exit(1);});
 '''

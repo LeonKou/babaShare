@@ -20,6 +20,8 @@
         location.href = UI.routeUrl("auth");
         return true;
       }
+      if (["users", "settings", "workspace-admin"].includes(payload.routeId) && user?.role !== "admin")
+        throw { status: "PERMISSION_DENIED" };
       const url = UI.routeUrl(payload.routeId, payload.params);
       active = payload;
       iframe.src = url;
@@ -27,13 +29,14 @@
       renderNav();
       const shellUrl = new URL(location.href);
       shellUrl.searchParams.set("route", payload.routeId);
-      shellUrl.searchParams.delete("workspaceId");
-      if (payload.params?.workspaceId)
-        shellUrl.searchParams.set("workspaceId", payload.params.workspaceId);
+      for (const key of ["workspaceId", "userId", "relation", "ownerStatus", "creator", "search"])
+        shellUrl.searchParams.delete(key);
+      for (const key of ["workspaceId", "userId", "relation", "ownerStatus", "creator", "search"])
+        if (payload.params?.[key]) shellUrl.searchParams.set(key, payload.params[key]);
       history.replaceState(null, "", shellUrl);
       return true;
     } catch (e) {
-      toast(errorText(e));
+      toast(errorText(e), { kind: "error" });
       return false;
     } finally {
       navigating = false;
@@ -44,7 +47,7 @@
     context: () => I18n.ctx,
     handlers: {
       "shell.toast": (payload) => {
-        toast(payload.message);
+        toast(payload.message, { kind: payload.kind, local: true });
         return true;
       },
       "shell.confirm": (payload) => UI.confirm(payload.message),
@@ -77,7 +80,7 @@
         "aria-label": workspace?.workspaceName || I18n.t(key),
         onclick: () => navigate({ routeId, params }),
       },
-      icon(workspace ? "folder" : routeId === "users" ? "users" : "user"),
+      icon(workspace ? "folder" : routeId === "users" ? "users" : routeId === "settings" ? "shield" : "user"),
       el("span", { text: workspace?.workspaceName || I18n.t(key) }),
     );
     if (
@@ -97,7 +100,7 @@
       $("#workspace-nav").append(navItem("allFiles", "workspace"));
     $("#account-nav").replaceChildren(navItem("account", "account"));
     if (user?.role === "admin")
-      $("#account-nav").append(navItem("users", "users"));
+      $("#account-nav").append(navItem("users", "users"), navItem("workspace-admin", "workspace-admin"), navItem("settings", "settings"));
     $("#new-workspace").hidden = user?.role === "viewer";
     $("#shell-account").replaceChildren(
       el("span", {
@@ -146,11 +149,16 @@
       });
     }
   });
+  let loggingOut = false;
   $("#logout").addEventListener("click", async () => {
+    if (loggingOut) return;
+    loggingOut = true;
+    const restoreLogout = UI.buttonBusy($("#logout"), true);
     try {
-      if (!(await host.request("page.beforeLeave", {}))) return;
+      if (!(await host.request("page.beforeLeave", {}))) { loggingOut = false; restoreLogout(); return; }
     } catch (e) {
-      toast(errorText(e));
+      toast(errorText(e), { kind: "error" });
+      loggingOut = false; restoreLogout();
       return;
     }
     let failed = false;
@@ -158,7 +166,7 @@
       await API("session", { method: "DELETE" });
     } catch (e) {
       failed = e.httpStatus !== 401;
-      if (failed) toast(errorText(e));
+      if (failed) toast(errorText(e), { kind: "error" });
     } finally {
       location.replace(UI.routeUrl("auth", failed ? { logout: "failed" } : {}));
     }
@@ -173,7 +181,7 @@
     user = await API("me");
     workspaces = await API("workspaces");
     const url = new URL(location.href),
-      routeId = ["workspace", "account", "users"].includes(
+      routeId = ["workspace", "account", "users", "settings", "workspace-admin"].includes(
         url.searchParams.get("route"),
       )
         ? url.searchParams.get("route")
@@ -183,13 +191,14 @@
     await navigate(
       {
         routeId,
-        params: routeId === "workspace" && workspaceId ? { workspaceId } : {},
+        params: routeId === "workspace" && workspaceId ? { workspaceId } : routeId === "workspace-admin"
+          ? Object.fromEntries(["userId", "relation", "ownerStatus", "creator", "search"].filter((key) => url.searchParams.has(key)).map((key) => [key, url.searchParams.get(key)])) : {},
       },
       true,
     );
   } catch (e) {
     if (e.httpStatus === 401) return;
-    toast(errorText(e));
+    toast(errorText(e), { kind: "error" });
     renderNav();
   }
 })();

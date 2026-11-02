@@ -12,6 +12,7 @@ class Element {
   replaceChildren(...items) { this.children = []; this.append(...items); }
   setAttribute(key, value) { this.attrs[key] = String(value); if (["value", "name", "id"].includes(key)) this[key] = value; }
   getAttribute(key) { return this.attrs[key]; }
+  removeAttribute(key) { delete this.attrs[key]; }
   addEventListener(key, action) { this.events[key] = action; }
   querySelector() { return null; }
   querySelectorAll() { return []; }

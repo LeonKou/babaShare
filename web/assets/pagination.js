@@ -1,12 +1,36 @@
 (() => {
   "use strict";
   const { el, button } = UI;
+  window.PagerFocus = function (container) {
+    let controls = {}, pending = null, parked = null;
+    return {
+      capture() {
+        const active = document.activeElement;
+        const current = Object.keys(controls).find((key) => controls[key] === active);
+        if (current) pending = current;
+        else if (active !== parked || !container.contains(active)) pending = null;
+      },
+      restore(nextControls, busy) {
+        controls = nextControls;
+        if (!pending) return;
+        let target = controls[pending];
+        if (target?.disabled) target = busy ? container :
+          Object.values(controls).find((control) => !control.disabled) || container;
+        if (!target) target = container;
+        if (target === container) container.setAttribute("tabindex", "-1");
+        target.focus();
+        parked = target;
+        if (!busy) pending = null;
+      },
+    };
+  };
   window.LocalPager = function (container, onChange, { remote = false } = {}) {
     let pageIndex = 1;
     let pageSize = 20;
     let totalCount = 0;
     let busy = false;
     let initialized = false;
+    const focus = PagerFocus(container);
     function readUrl() {
       const url = new URL(location.href);
       pageIndex = Math.max(
@@ -25,6 +49,7 @@
       history.replaceState(null, "", url);
     }
     function render() {
+      focus.capture();
       const totalPage = Math.max(1, Math.ceil(totalCount / pageSize));
       if (initialized) pageIndex = Math.min(pageIndex, totalPage);
       const select = el("select", {
@@ -83,6 +108,7 @@
         ),
       );
       container.setAttribute("aria-busy", String(busy));
+      focus.restore({ pageSize: select, previous, next }, busy);
     }
     window.addEventListener("popstate", () => {
       readUrl();

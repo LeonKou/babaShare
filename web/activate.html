@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN" dir="ltr" data-mode="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>babaShare · 激活账户</title>
+    <script src="assets/activate.js"></script>
+    <script src="assets/boot.js"></script>
+    <link rel="stylesheet" href="assets/tokens.css" />
+    <link rel="stylesheet" href="assets/components.css" />
+    <link rel="stylesheet" href="assets/layout.css" />
+  </head>
+  <body class="auth-body">
+    <div class="auth-settings" id="activation-settings"></div>
+    <main class="auth-panel">
+      <form id="activation-form" novalidate>
+        <h1 data-i18n="activationTitle">激活账户</h1>
+        <p class="auth-intro" data-i18n="activationHint">设置并确认密码后，账户将激活并自动登录首页。账号名与邮箱独立，均可用于登录。</p>
+        <p class="form-note" data-i18n="required">带 * 的字段为必填项。</p>
+        <div id="activation-fields"></div>
+        <div id="activation-status" class="status-line" role="status" aria-live="polite"></div>
+        <button type="submit" class="primary" id="activation-submit" data-i18n="activateAccount">激活账户</button>
+        <p><a href="auth.html" data-i18n="login">登录</a></p>
+      </form>
+    </main>
+    <script src="assets/i18n.js"></script>
+    <script src="assets/common.js"></script>
+    <script src="assets/api.js"></script>
+  </body>
+</html>

@@ -34,6 +34,14 @@
       <section id="account-panel-profile" class="account-panel" role="tabpanel" aria-labelledby="account-tab-profile" tabindex="0">
         <h2 id="profile-title" data-i18n="profile">账户资料</h2>
         <div id="profile-summary" class="profile-summary"></div>
+        <p class="form-note" data-i18n="accountReadOnlyHint">账号名仅管理员可修改，邮箱可通过下方验证流程独立换绑。</p>
+        <section class="section" aria-labelledby="account-email-title">
+          <h3 id="account-email-title" data-i18n="accountEmail">登录邮箱</h3>
+          <div id="account-email-summary"></div>
+          <p class="form-note" data-i18n="emailSameBrowserHint">请在发起操作的同一浏览器中登录对应账户并打开邮件链接完成验证。</p>
+          <div id="account-email-actions" class="actions"></div>
+          <div id="account-email-status" class="status-line" role="status" aria-live="polite"></div>
+        </section>
       </section>
       <section id="account-panel-keys" class="account-panel" role="tabpanel" aria-labelledby="account-tab-keys" tabindex="0" hidden>
         <header class="page-head">
@@ -74,5 +82,6 @@
     <script src="assets/pagination.js"></script>
     <script src="assets/mcp-help.js"></script>
     <script src="assets/account.js"></script>
+    <script src="assets/account-email.js"></script>
   </body>
 </html>

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN" dir="ltr" data-mode="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>babaShare · 设置</title>
+    <script src="assets/boot.js"></script>
+    <link rel="stylesheet" href="assets/tokens.css" />
+    <link rel="stylesheet" href="assets/components.css" />
+    <link rel="stylesheet" href="assets/layout.css" />
+  </head>
+  <body>
+    <main class="page">
+      <nav class="crumbs" aria-label="面包屑" data-i18n-label="breadcrumb">
+        <ol><li><a href="index.html" data-i18n="home">首页</a></li><li aria-current="page" data-i18n="settings">设置</li></ol>
+      </nav>
+      <header class="page-head"><div><h1 data-i18n="settings">设置</h1><p class="muted small" data-i18n="settingsHint">管理员专属设置。修改后提交才会生效。</p></div></header>
+      <div id="settings-status" class="status-line" role="status" aria-live="polite"></div>
+      <form id="registration-form" novalidate hidden>
+        <section class="section card" aria-labelledby="registration-settings-title">
+          <h2 id="registration-settings-title" data-i18n="registrationSettings">注册设置</h2>
+          <p id="registration-current" class="form-note" role="status" aria-live="polite"></p>
+          <div class="settings-row">
+            <div class="settings-row-copy">
+              <label for="registration-toggle" data-i18n="registration">开放注册</label>
+              <small id="registration-hint" data-i18n="registrationHint">开启后，任何人都可以注册新账户。</small>
+            </div>
+            <span class="settings-control settings-switch">
+              <input type="checkbox" role="switch" id="registration-toggle" aria-controls="email-registration-row registration-mail-fields" aria-describedby="registration-hint" />
+              <span class="settings-control-visual" aria-hidden="true"></span>
+            </span>
+          </div>
+          <div id="email-registration-row" class="settings-row" hidden>
+            <div class="settings-row-copy">
+              <label for="email-registration-toggle" data-i18n="emailRegistration">邮箱验证注册</label>
+              <small id="email-registration-hint" data-i18n="emailRegistrationHint">开启仅修改草稿并展开邮件配置；提交成功后才生效。配置区可单独折叠。</small>
+            </div>
+            <span class="settings-control settings-switch">
+              <input type="checkbox" role="switch" id="email-registration-toggle" aria-controls="registration-mail-fields" aria-describedby="email-registration-hint" />
+              <span class="settings-control-visual" aria-hidden="true"></span>
+            </span>
+          </div>
+        </section>
+        <details id="registration-mail-fields" class="section card settings-mail" hidden>
+          <summary>
+            <svg class="settings-disclosure-icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4 4 4-4 4" fill="none" stroke="currentColor" stroke-width="2" /></svg>
+            <h2 class="settings-mail-summary"><span data-i18n="mailSettings">邮件设置</span><small><span data-i18n="smtpServer">邮件服务器</span> · <span data-i18n="activationSettings">发件与激活设置</span></small></h2>
+          </summary>
+          <div class="settings-mail-content">
+            <p class="form-note" data-i18n="required">带 * 的字段为必填项</p>
+            <section class="section" aria-labelledby="smtp-title">
+              <h3 id="smtp-title" data-i18n="smtpServer">邮件服务器</h3>
+              <p class="form-note" data-i18n="smtpSecretWarning">密码不会回传；请保护数据目录访问权限。</p>
+              <div id="smtp-fields"></div>
+              <div class="settings-clear-password">
+                <label class="settings-checkbox-label" for="smtp-clear-password">
+                  <span class="settings-control settings-checkbox">
+                    <input type="checkbox" id="smtp-clear-password" aria-describedby="smtp-clear-hint" />
+                    <span class="settings-control-visual" aria-hidden="true"></span>
+                  </span>
+                  <span data-i18n="clearSmtpPassword">清除密码</span>
+                </label>
+                <small id="smtp-clear-hint" data-i18n="clearSmtpPasswordHint">仅提交成功后清除；环境变量密码不能清除。启用邮箱验证且需要认证时不能清除。</small>
+              </div>
+            </section>
+            <section class="section" aria-labelledby="activation-title">
+              <h3 id="activation-title" data-i18n="activationSettings">发件与激活设置</h3>
+              <p class="form-note" data-i18n="siteOriginHint">浏览器发送邮件时，服务端优先使用本次访问地址生成链接。保存配置会自动保存当前地址，供无浏览器来源的请求兜底；请使用用户可访问的地址，公网须使用 HTTPS。</p>
+              <div id="activation-fields"></div>
+            </section>
+          </div>
+        </details>
+        <div class="section settings-actions"><div id="settings-feedback" class="operation-feedback" role="status" aria-live="polite" aria-atomic="true"></div><div class="actions"><button type="button" id="settings-cancel" data-i18n="cancel">取消</button><button type="submit" id="settings-submit" class="primary" data-i18n="submitSettings">提交</button></div></div>
+      </form>
+    </main>
+    <div id="global-toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="assets/i18n.js"></script>
+    <script src="assets/bridge-core.js"></script>
+    <script src="assets/page-bridge.js"></script>
+    <script src="assets/common.js"></script>
+    <script src="assets/api.js"></script>
+    <script src="assets/settings.js"></script>
+  </body>
+</html>
