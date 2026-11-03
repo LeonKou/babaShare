@@ -162,11 +162,16 @@
     const download = el("a", { class: "file-preview-download", text: I18n.t("previewDownload"), "data-i18n": "previewDownload", download: "" });
     const content = el("div", { class: "file-preview-body" });
     download.hidden = true;
-    root.append(status, download, content);
+    const receiptStatus = el("div", { class: "status-line", role: "status", "aria-live": "polite" });
+    root.append(status, download, content, receiptStatus);
+    let receipt = null, receiptRetry = null;
     host.append(root);
     let generation = 0, controller = null, blobUrl = null, media = null, frame = null, unsubscribe = null, messageHandler = null, timer = null, disposed = false;
     function clear() {
       ++generation;
+      receipt = null;
+      receiptStatus.textContent = "";
+      receiptRetry?.remove(); receiptRetry = null;
       controller?.abort(); controller = null;
       clearTimeout(timer); timer = null;
       if (messageHandler) window.removeEventListener("message", messageHandler);
@@ -188,6 +193,38 @@
       clear();
       const current = generation;
       const format = classify(entry.name);
+      let completed = false, failed = false, receiptBusy = false, receiptDone = false;
+      let onboardingTicket = typeof entry.onboardingTicket === "string" ? entry.onboardingTicket : null;
+      const complete = () => {
+        if (current !== generation || disposed || failed || completed) return;
+        completed = true;
+        loaded();
+        if (!onboardingTicket || !window.API) return;
+        receipt = async () => {
+          if (receiptBusy || receiptDone || failed || current !== generation || disposed) return;
+          receiptBusy = true;
+          if (receiptRetry) receiptRetry.disabled = true;
+          try {
+            await API("onboardingPreview", { method: "POST", body: { ticket: onboardingTicket }, signal: controller.signal });
+            receiptDone = true; onboardingTicket = null;
+            if (current !== generation || disposed) return;
+            receiptStatus.textContent = "";
+            receiptRetry?.remove(); receiptRetry = null;
+            if (window.AppPage?.embedded) window.AppPage.request("onboarding.changed", { version: 1 }).catch((error) => console.warn("Onboarding refresh failed", error));
+          } catch (error) {
+            if (current !== generation || disposed || error.name === "AbortError") return;
+            receiptStatus.textContent = I18n.t("onboardingReceiptFailed");
+            if (!receiptRetry) { receiptRetry = UI.button("onboardingRetry", () => receipt?.()); root.append(receiptRetry); }
+          } finally { receiptBusy = false; if (receiptRetry) receiptRetry.disabled = false; }
+        };
+        receipt();
+      };
+      const fail = (key) => {
+        if (current !== generation || disposed) return;
+        failed = true; onboardingTicket = null; receipt = null;
+        receiptRetry?.remove(); receiptRetry = null; receiptStatus.textContent = "";
+        showError(key);
+      };
       controller = new AbortController();
       download.hidden = true;
       download.removeAttribute("href");
@@ -198,8 +235,11 @@
         if (format.kind === "unsupported") { showError("previewUnsupported"); return; }
         if (Number(entry.size) > format.limit) { showError("PREVIEW_TOO_LARGE"); return; }
         if (format.kind === "html") {
+          await readBytes(url, format.limit, controller.signal);
+          if (current !== generation || disposed) return;
           frame = el("iframe", { class: "preview-frame", title: I18n.t("filePreview"), "data-i18n-title": "filePreview", sandbox: "allow-scripts", allow: "fullscreen", allowfullscreen: "", referrerpolicy: "no-referrer" });
-          frame.addEventListener("load", () => { if (current === generation) loaded(); });
+          frame.addEventListener("load", complete);
+          frame.addEventListener("error", () => fail("previewReadFailed"));
           frame.src = url.href; content.append(frame); return;
         }
         const bytes = await readBytes(url, format.limit, controller.signal);
@@ -209,19 +249,19 @@
           frame.dataset.trusted = "office";
           const child = frame;
           let delivered = false;
-          const sendContext = () => child.contentWindow?.postMessage({ type: "preview-office.context", version: 1, context: { ...I18n.ctx } }, location.origin);
+          const sendContext = () => { if (disposed || failed || current !== generation) return; child.contentWindow?.postMessage({ type: "preview-office.context", version: 1, context: { ...I18n.ctx } }, location.origin); };
           messageHandler = (event) => {
-            if (event.origin !== location.origin || event.source !== child.contentWindow || event.data?.version !== 1 || current !== generation) return;
+            if (event.origin !== location.origin || event.source !== child.contentWindow || event.data?.version !== 1 || current !== generation || disposed || failed) return;
             if (event.data.type === "preview-office.ready" && !delivered) {
               delivered = true;
               child.contentWindow.postMessage({ type: "preview-office.load", version: 1, bytes, name: entry.name, context: { ...I18n.ctx } }, location.origin, [bytes]);
             }
-            if (event.data.type === "preview-office.loaded") { clearTimeout(timer); loaded(); }
-            if (event.data.type === "preview-office.error") { clearTimeout(timer); showError("previewRendererFailed"); }
+            if (event.data.type === "preview-office.loaded" && delivered) { clearTimeout(timer); complete(); }
+            if (event.data.type === "preview-office.error") { clearTimeout(timer); fail("previewRendererFailed"); }
           };
           window.addEventListener("message", messageHandler);
           unsubscribe = I18n.subscribe(sendContext);
-          timer = setTimeout(() => { if (current === generation) showError("previewRendererFailed"); }, 120000);
+          timer = setTimeout(() => { fail("previewRendererFailed"); }, 120000);
           content.append(frame); return;
         }
         if (["code", "text", "markdown"].includes(format.kind)) {
@@ -233,42 +273,48 @@
             frame = el("iframe", { class: "preview-frame", title: I18n.t("previewCode"), "data-i18n-title": "previewCode", sandbox: "allow-scripts allow-same-origin", src: "/baba-share/preview-code.html", referrerpolicy: "no-referrer" });
             frame.dataset.trusted = "code";
             const child = frame;
-            const send = () => child.contentWindow?.postMessage({ type: "preview-code.load", version: 1, text, language: format.language, context: { ...I18n.ctx }, label: I18n.t("previewCode"), hint: I18n.t("previewCodeKeyboard") }, location.origin);
+            let delivered = false;
+            const send = () => { if (disposed || failed || current !== generation) return; child.contentWindow?.postMessage({ type: "preview-code.load", version: 1, text, language: format.language, context: { ...I18n.ctx }, label: I18n.t("previewCode"), hint: I18n.t("previewCodeKeyboard") }, location.origin); };
             messageHandler = (event) => {
-              if (event.origin !== location.origin || event.source !== child.contentWindow || event.data?.version !== 1 || current !== generation) return;
-              if (event.data.type === "preview-code.ready") send();
-              if (event.data.type === "preview-code.loaded") { clearTimeout(timer); loaded(); }
-              if (event.data.type === "preview-code.error") { clearTimeout(timer); showError("previewRendererFailed"); }
+              if (event.origin !== location.origin || event.source !== child.contentWindow || event.data?.version !== 1 || current !== generation || disposed || failed) return;
+              if (event.data.type === "preview-code.ready" && !delivered) { delivered = true; send(); }
+              if (event.data.type === "preview-code.loaded" && delivered) { clearTimeout(timer); complete(); }
+              if (event.data.type === "preview-code.error") { clearTimeout(timer); fail("previewRendererFailed"); }
             };
             window.addEventListener("message", messageHandler);
             unsubscribe = I18n.subscribe(send);
-            timer = setTimeout(() => { if (current === generation) showError("previewRendererFailed"); }, 30000);
+            timer = setTimeout(() => { fail("previewRendererFailed"); }, 30000);
             content.append(frame); return;
           }
           content.append(format.kind === "markdown" ? markdown(text) : el("pre", { class: "file-preview-text", text, tabindex: "0", dir: "auto", "aria-label": I18n.t("filePreview") }));
-          loaded();
+          complete();
         } else {
           blobUrl = URL.createObjectURL(new Blob([bytes], { type: format.mime }));
           if (format.kind === "image") {
             const image = el("img", { class: "file-preview-image", src: blobUrl, alt: entry.name });
-            image.addEventListener("error", () => { if (current === generation) showError("previewRendererFailed"); }); content.append(image);
+            image.addEventListener("load", complete);
+            image.addEventListener("error", () => fail("previewRendererFailed")); content.append(image);
           } else if (format.kind === "pdf") {
-            frame = el("iframe", { class: "preview-frame", src: blobUrl, title: I18n.t("filePreview"), "data-i18n-title": "filePreview", referrerpolicy: "no-referrer" }); content.append(frame);
+            frame = el("iframe", { class: "preview-frame", src: blobUrl, title: I18n.t("filePreview"), "data-i18n-title": "filePreview", referrerpolicy: "no-referrer" });
+            // 浏览器原生PDF查看器无可信渲染完成协议，不把iframe load作为任务成功凭据。
+            frame.addEventListener("load", () => { if (current === generation && !disposed) loaded(); });
+            content.append(frame);
           } else {
             media = el(format.kind, { class: "file-preview-media", controls: "", preload: "metadata", src: blobUrl, "aria-label": entry.name });
-            media.addEventListener("error", () => { if (current === generation) showError("previewMediaUnsupported"); }); content.append(media);
+            media.addEventListener("loadeddata", complete);
+            media.addEventListener("canplay", complete);
+            media.addEventListener("error", () => fail("previewMediaUnsupported")); content.append(media);
           }
-          loaded();
         }
-        root.setAttribute("aria-busy", "false");
       } catch (error) {
         if (current !== generation || disposed || error.name === "AbortError") return;
-        showError(error.message === "PREVIEW_TOO_LARGE" ? "PREVIEW_TOO_LARGE" : error.message === "FILE_NOT_EXIST" ? "FILE_NOT_EXIST" : "previewReadFailed");
+        fail(error.message === "PREVIEW_TOO_LARGE" ? "PREVIEW_TOO_LARGE" : error.message === "FILE_NOT_EXIST" ? "FILE_NOT_EXIST" : "previewReadFailed");
       }
     }
-    function dispose() { if (disposed) return; disposed = true; clear(); root.remove(); window.removeEventListener("pagehide", dispose); }
+    function stop() { if (disposed) return; disposed = true; ++generation; controller?.abort(); clearTimeout(timer); receipt = null; }
+    function dispose() { stop(); clear(); root.remove(); window.removeEventListener("pagehide", dispose); }
     window.addEventListener("pagehide", dispose);
-    return { root, load, dispose, focus: () => { (frame || media || (!download.hidden && download) || content.querySelector("[tabindex]") || root).focus(); } };
+    return { root, load, stop, dispose, focus: () => { (frame || media || (!download.hidden && download) || content.querySelector("[tabindex]") || root).focus(); } };
   }
   function open(name, url, options = {}) {
     let viewer, enterFrame, revealFrame, exitTimer, closing = false;
@@ -280,6 +326,7 @@
       const requestClose = () => {
         if (closing) return;
         closing = true;
+        viewer.stop();
         cancelAnimationFrame(enterFrame); cancelAnimationFrame(revealFrame);
         node.classList.remove("is-visible");
         if (reducedMotion()) finish();

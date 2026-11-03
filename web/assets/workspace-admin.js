@@ -57,7 +57,7 @@
         el("summary", { text: `${I18n.t("workspaceMembers")} · ${I18n.t("memberSummary", { total: row.memberCount, collaborators: row.collaboratorCount })}` }),
         row.members.length ? el("ul", {}, ...row.members.map((member) => el("li", {},
           el("bdi", { text: member.nickname }),
-          document.createTextNode(` · ${I18n.t(member.isOwner ? "owner" : member.role === "viewer" ? "readonly" : member.collaborate ? "collaborator" : "independentMember")}${member.isDisabled ? " · " + I18n.t("disabled") : ""}`),
+          document.createTextNode(` · ${I18n.t(member.isOwner ? "owner" : "memberRole_" + member.memberRole)}${member.isDisabled ? " · " + I18n.t("disabled") : ""}`),
         ))) : el("p", { class: "muted", text: I18n.t("noWorkspaceMembers") }),
       ),
       el("footer", {}, openLink(row), button("transferWorkspace", () => transfer(row))),

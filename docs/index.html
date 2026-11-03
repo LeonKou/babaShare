@@ -9,7 +9,7 @@
   <meta property="og:locale" content="zh_CN">
   <meta property="og:site_name" content="babaShare">
   <meta property="og:title" content="babaShare — 让原型，从你电脑走到团队面前。">
-  <meta property="og:description" content="上传完整 HTML 原型，在自己的服务上协作、预览与分享。支持目录资源、三种角色、限时分享及 19 个 MCP 工具。">
+  <meta property="og:description" content="上传完整 HTML 原型，在自己的服务上协作、预览与分享。支持目录资源、账户与工作区分层权限、限时分享及 19 个 MCP 工具。">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="babaShare — HTML 原型协作与分享">
   <meta name="twitter:description" content="把电脑里的 HTML 原型，交到团队面前。轻量、自托管，无需编译。">
@@ -106,7 +106,7 @@
         <p id="demo-status" class="sr-only" role="status" aria-live="polite"></p>
       </div>
     </section>
-    <div class="fact-strip page-width" aria-label="产品特性" data-i18n-aria="factsLabel"><span data-i18n="fact1">完整目录与相对资源</span><span data-i18n="fact2">管理员 / 编辑者 / 查看者</span><span data-i18n="fact3">限时 · 永久 · 随时撤销</span><span data-i18n="fact4">19 个 MCP 工具</span></div>
+    <div class="fact-strip page-width" aria-label="产品特性" data-i18n-aria="factsLabel"><span data-i18n="fact1">完整目录与相对资源</span><span data-i18n="fact2">账户角色 / 工作区角色</span><span data-i18n="fact3">限时 · 永久 · 随时撤销</span><span data-i18n="fact4">19 个 MCP 工具</span></div>
     <section class="section page-width" id="workflow" aria-labelledby="workflow-title">
       <div class="section-head"><div><p class="eyebrow" data-i18n="workflowEyebrow">01 / 从本地到团队</p><h2 id="workflow-title" data-i18n="workflowTitle">想法不该，<br>停在你的桌面。</h2></div><p class="section-intro" data-i18n="workflowIntro">从能打开的 HTML，到能一起讨论的原型。三个步骤，让下一轮沟通从同一个画面开始。</p></div>
       <div class="workflow">
@@ -118,7 +118,7 @@
     <section class="section page-width" id="collaboration" aria-labelledby="collab-title">
       <div class="section-head"><div><p class="eyebrow" data-i18n="collabEyebrow">02 / 协作，有清晰的边界</p><h2 id="collab-title" data-i18n="collabTitle">同一个工作区，<br>各自合适的位置。</h2></div><p class="section-intro" data-i18n="collabIntro">让需要动手的人编辑，让需要了解的人查看。把文件、成员和访问控制放在同一个地方。</p></div>
       <div class="collab-grid">
-        <article class="collab-item"><h3 data-i18n="rolesTitle">三种角色，权限清楚</h3><p data-i18n="rolesCopy">权限实时生效，MCP 同样遵循账号权限。工作区协作设置不会让查看者获得编辑能力。</p><div class="role-line"><div class="role"><strong data-i18n="admin">管理员</strong><span data-i18n="adminCopy">管理账号与全部工作区</span></div><div class="role"><strong data-i18n="editor">编辑者</strong><span data-i18n="editorCopy">在授权范围内创建、修改</span></div><div class="role"><strong data-i18n="viewer">查看者</strong><span data-i18n="viewerCopy">只读查看有权访问的内容</span></div></div></article>
+        <article class="collab-item"><h3 data-i18n="rolesTitle">账户与工作区，分层授权</h3><p data-i18n="rolesCopy">账户角色为 admin / editor；工作区成员角色为 viewer / editor / manager。权限实时生效，MCP 同样遵循这些权限。</p><div class="role-line"><div class="role"><strong data-i18n="admin">账户管理员（admin）</strong><span data-i18n="adminCopy">管理账号与全部工作区</span></div><div class="role"><strong data-i18n="editor">普通账户（editor）</strong><span data-i18n="editorCopy">在授权范围内创建、修改</span></div><div class="role"><strong data-i18n="workspaceRoles">工作区成员</strong><span data-i18n="workspaceRolesCopy">viewer 查看 / editor 编辑 / manager 管理</span></div></div></article>
         <article class="collab-item"><h3 data-i18n="controlTitle">分享出去，也能收回来</h3><p data-i18n="controlCopy">目录分享支持限时或永久有效，也支持随时撤销。分享链接本身就是访问凭据，请只交给合适的人。</p><p class="editorial-detail" data-i18n="controlDetail">有期限的讨论，不必留下无限期的入口。</p></article>
         <article class="collab-item"><h3 data-i18n="resourcesTitle">页面之外，资源一起到位</h3><p data-i18n="resourcesCopy">多级目录、批量上传、搜索和在线 UTF-8 编辑，照顾完整原型的日常管理。同名冲突可覆盖、保留两份或取消。</p></article>
         <article class="collab-item"><h3 data-i18n="previewTitle">为静态原型而设计</h3><p data-i18n="previewCopy">目录入口优先匹配 index.html，其次 home.html。受控沙箱预览支持脚本，但部分联网、存储和窗口能力受限。</p></article>
@@ -143,7 +143,7 @@ docker compose logs --tail=100</code></pre><p class="micro-note" data-i18n="dock
         <details><summary data-i18n="faq1Q">这里可以直接上传或在线试用吗？</summary><p data-i18n="faq1A">这里是静态产品官网。上方窗口仅使用本地演示数据，没有上传、登录或真实分享服务。实际使用需要先部署 babaShare，并在自己的实例上创建账号。</p></details>
         <details><summary data-i18n="faq2Q">能保留完整原型的目录结构吗？</summary><p data-i18n="faq2A">可以管理多级目录并上传 HTML、CSS、JavaScript 和图片，请保留相对资源引用。根绝对路径不会自动改写；保留两份同名文件也不会改写 HTML 引用。</p></details>
         <details><summary data-i18n="faq3Q">可以托管带后端的应用吗？</summary><p data-i18n="faq3A">产品面向静态 HTML 原型，上传的 PHP、Python 或 Node.js 服务端脚本不会执行。依赖联网 API、登录态、持久存储、表单或弹窗的原型，可能受预览沙箱限制。</p></details>
-        <details><summary data-i18n="faq4Q">编辑者和查看者有什么区别？</summary><p data-i18n="faq4A">编辑者可创建工作区，并在工作区及文件归属权限范围内修改内容；查看者始终只读。成员协作设置不会越过账号角色边界，MCP 也继承这些实时权限。</p></details>
+        <details><summary data-i18n="faq4Q">账户角色和工作区角色有什么区别？</summary><p data-i18n="faq4A">账户角色只有 admin / editor，普通账户可创建工作区。工作区成员按 viewer / editor / manager 分别查看、编辑或管理；同一账户在不同工作区可有不同成员角色，内容归属规则仍生效。MCP 也继承这些实时权限。</p></details>
         <details><summary data-i18n="faq5Q">数据放在哪里？如何备份？</summary><p data-i18n="faq5A">数据保存在你指定的本地数据根，包括 SQLite、上传文件和存在时的 MCP 主密钥。优先停止服务后成套备份整个根目录，不要只拷贝运行中的数据库主文件。</p></details>
         <details><summary data-i18n="faq6Q">在哪里获取代码和部署文档？</summary><p data-i18n="faq6A">GitHub 仓库已公开，可直接查看代码、部署手册和 MCP 指南。公开可见不等于授予开源许可；使用、修改或分发前，请核对仓库的许可声明。</p></details>
       </div>

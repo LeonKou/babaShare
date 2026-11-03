@@ -39,7 +39,8 @@ class InvitationHttpTests(unittest.TestCase):
         token = self.token(invitation)
         self.assertRegex(token, r"^[A-Za-z0-9_-]{43}$")
         self.assertEqual(invitation["expireTime"] - invitation["createTime"], 7 * 86400000)
-        self.assertFalse(invitation["collaborate"])
+        self.assertEqual(invitation["memberRole"], "viewer")
+        self.assertNotIn("collaborate", invitation)
         row = self.app.service.repo.one("SELECT invitation_hash FROM workspace_invitation WHERE id=?", (db_id(invitation["id"]),))
         self.assertNotEqual(row["invitation_hash"], token)
         self.assertNotIn(token.encode(), self.config.database_path.read_bytes())
@@ -61,40 +62,45 @@ class InvitationHttpTests(unittest.TestCase):
         self.assertNotIn(token, json.dumps(listed))
         self.assertNotIn("invitation_hash", json.dumps(listed))
         self.assertEqual(self.join(invitation)["workspaceId"], self.workspace)
-        member = self.app.service.repo.one("SELECT is_collaborate FROM workspace_member WHERE workspace_id=? AND user_id=?", (db_id(self.workspace), db_id(self.users["peer"]["id"])))
-        self.assertEqual(member["is_collaborate"], 0)
+        member = self.app.service.repo.one("SELECT member_role FROM workspace_member WHERE workspace_id=? AND user_id=?", (db_id(self.workspace), db_id(self.users["peer"]["id"])))
+        self.assertEqual(member["member_role"], "viewer")
+        self.denied("POST", "/folder", "peer", {"workspaceId": self.workspace, "path": "default-readonly"})
+        self.join(self.invite(memberRole="editor"), "viewer")
+        self.ok("POST", "/folder", "viewer", {"workspaceId": self.workspace, "path": "explicit-editor"})
 
-    def test_manager_scope_collaboration_and_viewer_always_readonly(self):
+    def test_manager_invitation_scope_and_workspace_viewer_readonly(self):
         for actor in ("peer", "viewer"):
             self.denied("POST", "/invitation", actor, {"workspaceId": self.workspace, "requestId": str(uuid.uuid4())})
             self.denied("GET", "/invitation/list", actor, query={"workspaceId": self.workspace})
-        invitation = self.invite(collaborate=True)
+        invitation = self.invite(memberRole="manager")
         self.join(invitation)
-        self.join(invitation, "viewer")
+        self.join(self.invite(memberRole="viewer"), "viewer")
         members = self.ok("GET", "/member/list", "owner", query={"workspaceId": self.workspace})
-        self.assertTrue(all(item["collaborate"] for item in members))
+        roles = {item["userId"]: item["memberRole"] for item in members}
+        self.assertEqual(roles[self.users["peer"]["id"]], "manager")
+        self.assertEqual(roles[self.users["viewer"]["id"]], "viewer")
+        self.assertTrue(all("collaborate" not in item for item in members))
         self.denied("POST", "/folder", "viewer", {"workspaceId": self.workspace, "path": "denied"})
-        self.denied("DELETE", "/invitation", "peer", query={"id": invitation["id"]})
+        self.denied("DELETE", "/invitation", "viewer", query={"id": invitation["id"]})
+        self.ok("DELETE", "/invitation", "peer", query={"id": invitation["id"]})
+        self.assertIn("id", self.invite("peer"))
         self.assertIn("id", self.invite("admin"))
-        self.ok("PATCH", "/user", "admin", {"id": self.users["owner"]["id"], "role": "viewer"})
-        try:
-            self.denied("POST", "/invitation", "owner", {"workspaceId": self.workspace, "requestId": str(uuid.uuid4())})
-        finally:
-            self.ok("PATCH", "/user", "admin", {"id": self.users["owner"]["id"], "role": "editor"})
+        self.ok("PATCH", "/member", "owner", {"workspaceId": self.workspace, "userId": self.users["peer"]["id"], "memberRole": "viewer"})
+        self.denied("POST", "/invitation", "peer", {"workspaceId": self.workspace, "requestId": str(uuid.uuid4())})
 
     def test_existing_member_owner_and_concurrent_join_idempotency(self):
-        invitation = self.invite(collaborate=True)
-        self.ok("POST", "/member", "owner", {"workspaceId": self.workspace, "userId": self.users["peer"]["id"], "collaborate": False})
-        original = self.app.service.repo.one("SELECT id,is_collaborate,update_time FROM workspace_member WHERE workspace_id=? AND user_id=?", (db_id(self.workspace), db_id(self.users["peer"]["id"])))
+        invitation = self.invite(memberRole="manager")
+        self.ok("POST", "/member", "owner", {"workspaceId": self.workspace, "userId": self.users["peer"]["id"], "memberRole": "editor"})
+        original = self.app.service.repo.one("SELECT id,member_role,update_time FROM workspace_member WHERE workspace_id=? AND user_id=?", (db_id(self.workspace), db_id(self.users["peer"]["id"])))
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
             results = list(pool.map(lambda _: self.join(invitation), range(16)))
         self.assertTrue(all(result["workspaceId"] == self.workspace for result in results))
-        actual = self.app.service.repo.one("SELECT id,is_collaborate,update_time FROM workspace_member WHERE workspace_id=? AND user_id=?", (db_id(self.workspace), db_id(self.users["peer"]["id"])))
+        actual = self.app.service.repo.one("SELECT id,member_role,update_time FROM workspace_member WHERE workspace_id=? AND user_id=?", (db_id(self.workspace), db_id(self.users["peer"]["id"])))
         self.assertEqual(actual, original)
-        self.ok("POST", "/member", "owner", {"workspaceId": self.workspace, "userId": self.users["peer"]["id"], "collaborate": True})
-        original = self.app.service.repo.one("SELECT id,is_collaborate,update_time FROM workspace_member WHERE workspace_id=? AND user_id=?", (db_id(self.workspace), db_id(self.users["peer"]["id"])))
-        self.join(self.invite(collaborate=False))
-        self.assertEqual(self.app.service.repo.one("SELECT id,is_collaborate,update_time FROM workspace_member WHERE workspace_id=? AND user_id=?", (db_id(self.workspace), db_id(self.users["peer"]["id"]))), original)
+        self.ok("POST", "/member", "owner", {"workspaceId": self.workspace, "userId": self.users["peer"]["id"], "memberRole": "manager"})
+        original = self.app.service.repo.one("SELECT id,member_role,update_time FROM workspace_member WHERE workspace_id=? AND user_id=?", (db_id(self.workspace), db_id(self.users["peer"]["id"])))
+        self.join(self.invite(memberRole="editor"))
+        self.assertEqual(self.app.service.repo.one("SELECT id,member_role,update_time FROM workspace_member WHERE workspace_id=? AND user_id=?", (db_id(self.workspace), db_id(self.users["peer"]["id"]))), original)
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
             list(pool.map(lambda _: self.join(invitation, "viewer"), range(16)))
         self.assertEqual(self.app.service.repo.one("SELECT count(*) AS member_count FROM workspace_member WHERE workspace_id=?", (db_id(self.workspace),))["member_count"], 2)
@@ -123,40 +129,43 @@ class InvitationHttpTests(unittest.TestCase):
         self.denied("POST", "/invitation/membership", "viewer", {"token": self.token(invitation)}, expected=404)
 
     def test_creator_live_disable_role_and_ownership_checks(self):
-        for change, reset in (({"isDisabled": True}, {"isDisabled": False}), ({"role": "viewer"}, {"role": "editor"})):
-            invitation = self.invite()
-            self.ok("PATCH", "/user", "admin", {"id": self.users["owner"]["id"], **change})
-            try:
-                self.denied("POST", "/invitation/membership", "peer", {"token": self.token(invitation)}, expected=404)
-            finally:
-                self.ok("PATCH", "/user", "admin", {"id": self.users["owner"]["id"], **reset})
-                _, _, headers = self.request("POST", "/visitor/session", body={"userName": "qa-owner", "password": "qa-isolated-password-123"})
-                self.cookies["owner"] = headers["set-cookie"].split(";", 1)[0]
+        invitation = self.invite()
+        self.ok("PATCH", "/user", "admin", {"id": self.users["owner"]["id"], "isDisabled": True})
+        try:
+            self.denied("POST", "/invitation/membership", "peer", {"token": self.token(invitation)}, expected=404)
+        finally:
+            self.ok("PATCH", "/user", "admin", {"id": self.users["owner"]["id"], "isDisabled": False})
+            _, _, headers = self.request("POST", "/visitor/session", body={"userName": "qa-owner", "password": "qa-isolated-password-123"})
+            self.cookies["owner"] = headers["set-cookie"].split(";", 1)[0]
+        self.ok("POST", "/member", "owner", {"workspaceId": self.workspace, "userId": self.users["peer"]["id"], "memberRole": "manager"})
+        invitation = self.invite("peer")
+        self.ok("PATCH", "/member", "owner", {"workspaceId": self.workspace, "userId": self.users["peer"]["id"], "memberRole": "viewer"})
+        self.denied("POST", "/invitation/membership", "viewer", {"token": self.token(invitation)}, expected=404)
         invitation = self.invite()
         self.app.service.repo.execute("UPDATE project_workspace SET owner_id=? WHERE id=?", (db_id(self.users["admin"]["id"]), db_id(self.workspace)))
-        self.denied("POST", "/invitation/membership", "peer", {"token": self.token(invitation)}, expected=404)
+        self.denied("POST", "/invitation/membership", "viewer", {"token": self.token(invitation)}, expected=404)
 
     def test_creation_idempotency_and_origin_guard(self):
         body = {"workspaceId": self.workspace, "requestId": str(uuid.uuid4())}
         self.ok("POST", "/invitation", "owner", body)
         self.assertEqual(self.denied("POST", "/invitation", "owner", body, expected=409)["status"], "INVITATION_ALREADY_CREATED")
-        self.assertEqual(self.denied("POST", "/invitation", "owner", {**body, "collaborate": True}, expected=409)["status"], "REQUEST_CONFLICT")
-        for values in ({"collaborate": "true"}, {"expireHours": 0}, {"expireHours": 721}, {"requestId": "bad"}):
+        self.assertEqual(self.denied("POST", "/invitation", "owner", {**body, "memberRole": "manager"}, expected=409)["status"], "REQUEST_CONFLICT")
+        for values in ({"memberRole": "admin"}, {"expireHours": 0}, {"expireHours": 721}, {"requestId": "bad"}):
             self.denied("POST", "/invitation", "owner", {**body, **values}, expected=400)
         invitation = self.invite()
         for headers in ({"Origin": "null"}, {"Sec-Fetch-Site": "cross-site"}):
             self.assertEqual(self.request("POST", "/invitation/membership", "peer", {"token": self.token(invitation)}, headers=headers)[0], 403)
 
-    def test_mcp_physical_delete_preserves_other_key_master_and_legacy(self):
+    def test_mcp_physical_delete_preserves_other_key_master_and_expired_key(self):
         def key(name):
             return self.ok("POST", "/mcp-key", "owner", {"keyName": name, "expireHours": None, "requestId": str(uuid.uuid4())})
-        removed, retained, old = key("remove"), key("retain"), key("legacy-revoked")
+        removed, retained, expired = key("remove"), key("retain"), key("expired")
         master_path = self.config.root / "data" / "mcp-key-master"
         master = master_path.read_bytes()
         nonce = self.app.service.repo.one("SELECT mcp_derivation_nonce FROM auth_mcp_key WHERE id=?", (db_id(removed["id"]),))["mcp_derivation_nonce"]
-        self.app.service.repo.execute("UPDATE auth_mcp_key SET revoked_time=? WHERE id=?", (now_ms(), db_id(old["id"])))
+        self.app.service.repo.execute("UPDATE auth_mcp_key SET expire_time=? WHERE id=?", (now_ms() - 1, db_id(expired["id"])))
         Application(self.config)
-        self.assertIsNotNone(self.app.service.repo.one("SELECT id FROM auth_mcp_key WHERE id=?", (db_id(old["id"]),)))
+        self.assertIsNotNone(self.app.service.repo.one("SELECT id FROM auth_mcp_key WHERE id=?", (db_id(expired["id"]),)))
         self.denied("DELETE", "/mcp-key", "peer", query={"id": removed["id"]}, expected=404)
         self.ok("DELETE", "/mcp-key", "owner", query={"id": removed["id"]})
         self.assertIsNone(self.app.service.repo.one("SELECT id FROM auth_mcp_key WHERE id=?", (db_id(removed["id"]),)))
@@ -168,8 +177,8 @@ class InvitationHttpTests(unittest.TestCase):
         self.assertEqual(status, 401)
         ids = [item["id"] for item in self.ok("GET", "/mcp-key/list", "owner")]
         self.assertNotIn(removed["id"], ids)
-        self.assertIn(old["id"], ids)
-        self.ok("DELETE", "/mcp-key", "owner", query={"id": old["id"]})
+        self.assertIn(expired["id"], ids)
+        self.ok("DELETE", "/mcp-key", "owner", query={"id": expired["id"]})
         self.app.service.repo.execute("UPDATE auth_mcp_key SET expire_time=? WHERE id=?", (now_ms() - 1, db_id(retained["id"])))
         self.ok("DELETE", "/mcp-key", "owner", query={"id": retained["id"]})
 

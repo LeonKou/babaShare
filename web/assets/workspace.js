@@ -112,9 +112,11 @@
     return el("button", { type: "button", class: cls, text, onclick: action });
   }
   async function createWorkspace() {
+    if (!me || !["admin", "editor"].includes(me.role)) return;
     const result = await formDialog(
       I18n.t("newWorkspace"),
-      [{ key: "workspaceName", required: true }],
+      [{ key: "workspaceName", required: true,
+        validator: (value) => value.trim().length > 100 ? I18n.t("invalidInput") : "" }],
       (v) => API("workspace", { method: "POST", body: v }),
       { saveKey: "create" },
     );
@@ -175,6 +177,7 @@
     if (workspace) await Promise.all([loadFiles(), loadMembers()]);
   }
   function renderChrome() {
+    $("#personal-quota").replaceChildren(...(me?.quota ? [UI.quotaSummary(me.quota)] : []));
     closeRowMenu();
     crumbs();
     const picking = !workspace;
@@ -197,16 +200,14 @@
       $("#workspace-role").textContent = I18n.t(
         workspace.ownerId === me?.id
           ? "owner"
-          : workspace.canWrite
-            ? "editor"
-            : "viewer",
+          : "memberRole_" + workspace.memberRole,
       );
     $("#workspace-head-actions").replaceChildren();
-    if (picking && me?.role !== "viewer")
+    if (picking && ["admin", "editor"].includes(me?.role))
       $("#workspace-head-actions").append(
         button("newWorkspace", createWorkspace, "primary", "plus"),
       );
-    if (workspace?.canManage && workspace.canWrite)
+    if (workspace?.canManage)
       $("#workspace-head-actions").append(
         button("editWorkspace", () => editWorkspace(workspace), "", "edit"),
         button("deleteWorkspace", () => deleteWorkspace(workspace), "danger", null, { showBusy: true }),
@@ -219,7 +220,6 @@
     if (workspace?.canWrite)
       $("#file-actions").append(
         button("newFolder", newFolder, "", "plus"),
-        button("newHtml", newHtml, "", "code"),
         uploadMenu(),
       );
     $("#drop-zone").hidden = !workspace?.canWrite;
@@ -248,7 +248,7 @@
               text: w.workspaceName, onclick: open })),
             el("span", {
               class: "badge",
-              text: I18n.t(w.canWrite ? "editor" : "viewer"),
+              text: I18n.t(w.ownerId === me?.id ? "owner" : "memberRole_" + w.memberRole),
             }),
           ),
           el("p", {
@@ -256,7 +256,7 @@
             text: w.description || I18n.t("workspaceHint"),
           }),
           el("p", { class: "small muted num", text: UI.date(w.createTime) }),
-          w.canManage && w.canWrite ? el(
+          w.canManage ? el(
             "footer",
             { onclick: (event) => event.stopPropagation() },
             button("editWorkspace", () => editWorkspace(w), "", "edit"),
@@ -270,7 +270,7 @@
         UI.empty(
           "emptyWorkspaces",
           "emptyWorkspacesHint",
-          me?.role !== "viewer"
+          ["admin", "editor"].includes(me?.role)
             ? button("newWorkspace", createWorkspace, "primary")
             : null,
         ),
@@ -487,6 +487,17 @@
       icon(name),
     );
   }
+  async function refreshQuota() {
+    try {
+      const quota = await API("quota");
+      if (me) me.quota = quota;
+      $("#personal-quota").replaceChildren(UI.quotaSummary(quota));
+    } catch (error) {
+      if (me) me.quota = null;
+      $("#personal-quota").replaceChildren(el("p", { class: "error", text: errorText(error) }));
+      toast(errorText(error), { kind: "error" });
+    }
+  }
   async function loadFiles() {
     if (!workspace) return;
     controller?.abort();
@@ -516,6 +527,13 @@
       }
       entries = data.entries;
       renderFiles();
+      if (me?.role !== "admin") {
+        try { await API("onboardingVisit", { method: "POST", body: { workspaceId: workspace.id } }); }
+        catch (_) { toast(I18n.t("onboardingVisitFailed"), { kind: "error" }); }
+        if (page.embedded) page.request("onboarding.changed", { version: 1 }).catch((error) => console.warn("Onboarding refresh failed", error));
+      }
+      if (current !== requestId) return;
+      await refreshQuota();
       $("#file-status").textContent = "";
       updateUrl();
     } catch (e) {
@@ -549,7 +567,7 @@
     for (const member of members)
       $("#member-list").append(memberRow(member, member.isOwner));
     $("#member-actions").replaceChildren();
-    if (workspace.canManage && workspace.canWrite)
+    if (workspace.canManage)
       $("#member-actions").append(button("invite", inviteMember, "", "plus"),
         button("inviteManage", manageInvitations));
   }
@@ -569,16 +587,12 @@
           text: I18n.t(
             isOwner
               ? "owner"
-              : member.role === "viewer"
-                ? "viewer"
-                : member.collaborate
-                  ? "editor"
-                  : "noCollaborate",
+              : "memberRole_" + member.memberRole,
           ),
         }),
       ),
     );
-    if (!isOwner && workspace.canManage && workspace.canWrite) {
+    if (!isOwner && workspace.canManage) {
       const details = el("details", { class: "row-menu" });
       details.append(
         el("summary", { "aria-label": I18n.t("actions"), text: "…" }),
@@ -603,15 +617,15 @@
     }
     return row;
   }
+  function memberRoles() {
+    return ["viewer", "editor", "manager"].map((value) => ({ value, label: I18n.t("memberRole_" + value) }));
+  }
   async function inviteMember() {
     const destination = workspace.id, requestId = crypto.randomUUID();
     const result = await formDialog(
       I18n.t("invite"),
       [
-        { key: "role", name: "collaborate", value: "false", options: [
-          { value: "false", label: I18n.t("noCollaborate") },
-          { value: "true", label: I18n.t("collaborate") },
-        ] },
+        { key: "memberRole", name: "memberRole", value: "viewer", options: memberRoles(), hint: I18n.t("memberRoleHint") },
         { key: "expiry", name: "expireHours", value: "168", options: [
           { value: "24", label: I18n.t("day1") },
           { value: "168", label: I18n.t("day7") },
@@ -619,7 +633,7 @@
         ] },
       ],
       (v) => API("invitation", { method: "POST", body: { workspaceId: destination,
-        collaborate: v.collaborate === "true", expireHours: Number(v.expireHours), requestId } }),
+        memberRole: v.memberRole, expireHours: Number(v.expireHours), requestId } }),
       { saveKey: "inviteGenerate", intro: I18n.t("inviteHint") },
     );
     if (!result) return;
@@ -662,7 +676,7 @@
               finally { remove.disabled = false; list.setAttribute("aria-busy", "false"); }
             }, "danger", null, { showBusy: true });
             return el("article", { class: "card invitation-card" },
-              el("header", {}, el("h3", { text: I18n.t(invitation.collaborate ? "collaborate" : "noCollaborate") }),
+              el("header", {}, el("h3", { text: I18n.t("memberRole_" + invitation.memberRole) }),
                 el("span", { class: "badge", text: I18n.t(invitation.isActive ? "active" : "expired") })),
               el("p", { class: "small muted num", text: I18n.t("created") + ": " + UI.date(invitation.createTime) }),
               el("p", { class: "small muted num", text: I18n.t("expires") + ": " + UI.date(invitation.expireTime) }),
@@ -681,13 +695,11 @@
       I18n.t("edit"),
       [
         {
-          key: "role",
-          name: "collaborate",
-          value: String(member.collaborate),
-          options: [
-            { value: "false", label: I18n.t("noCollaborate") },
-            { value: "true", label: I18n.t("collaborate") },
-          ],
+          key: "memberRole",
+          name: "memberRole",
+          value: member.memberRole,
+          options: memberRoles(),
+          hint: I18n.t("memberRoleHint"),
         },
       ],
       (v) =>
@@ -696,7 +708,7 @@
           body: {
             workspaceId: workspace.id,
             userId: member.userId,
-            collaborate: v.collaborate === "true",
+            memberRole: v.memberRole,
           },
         }),
     );
@@ -734,39 +746,6 @@
           body: { workspaceId: workspace.id, path: join(path, v.name.trim()) },
         }),
       { saveKey: "create" },
-    );
-    if (result) await loadFiles();
-  }
-  async function newHtml() {
-    const result = await formDialog(
-      I18n.t("newHtml"),
-      [
-        {
-          key: "name",
-          required: true,
-          value: "index.html",
-          hint: I18n.t("htmlHint"),
-          validator: (v) =>
-            UI.nameValidator(v) || (!isHtml(v) ? I18n.t("htmlHint") : ""),
-        },
-        {
-          key: "content",
-          name: "content",
-          type: "textarea",
-          value:
-            '<!doctype html>\n<html lang="zh-CN">\n<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>New page</title></head>\n<body>\n  <h1>Hello, babaShare.</h1>\n</body>\n</html>',
-        },
-      ],
-      (v) =>
-        API("content", {
-          method: "PUT",
-          body: {
-            workspaceId: workspace.id,
-            path: join(path, v.name.trim()),
-            content: v.content,
-          },
-        }),
-      { wide: true, saveKey: "create", dirty: true },
     );
     if (result) await loadFiles();
   }
@@ -861,19 +840,14 @@
     try {
       const ticket = await API("ticket", {
         method: "POST",
-        body: { workspaceId: workspace.id, path: parentPath(entry.path) },
+        body: { workspaceId: workspace.id, path: entry.path },
       });
-      const url = new URL(
-        encodeURIComponent(entry.name),
-        ticket.previewBaseUrl,
-      );
-      await FilePreview.open(entry.name, url.href, { size: entry.size });
+      await FilePreview.open(entry.name, ticket.previewUrl, { size: entry.size, onboardingTicket: ticket.onboardingTicket });
     } catch (e) {
       toast(errorText(e), { kind: "error" });
     }
   }
-  const shareIsActive = (share) => share.revokedTime == null &&
-    (share.expireTime == null || share.expireTime > Date.now());
+  const shareIsActive = (share) => share.expireTime == null || share.expireTime > Date.now();
   async function shareFolder() {
     if (sharing || !workspace?.canWrite) return;
     sharing = true;
@@ -1147,11 +1121,36 @@
   try {
     me = await API("me");
     workspaces = await API("workspaces");
-    const id = new URL(location.href).searchParams.get("workspaceId");
+    const url = new URL(location.href), id = url.searchParams.get("workspaceId");
+    const createRequested = url.searchParams.get("action") === "create";
+    const onboardingTask = url.searchParams.get("onboardingTask");
+    if (url.searchParams.has("onboardingTask")) {
+      url.searchParams.delete("onboardingTask");
+      history.replaceState(history.state, "", url);
+    }
+    if (url.searchParams.has("action")) {
+      url.searchParams.delete("action");
+      history.replaceState(history.state, "", url);
+    }
     workspace = workspaces.find((w) => w.id === id) || null;
     readUrl();
     renderChrome();
     if (workspace) await Promise.all([loadFiles(), loadMembers()]);
+    if (createRequested) await createWorkspace();
+    if (me.role !== "admin" && onboardingTask) {
+      if (["create_folder", "upload_file"].includes(onboardingTask) && !workspace?.canWrite) {
+        toast(I18n.t("onboardingOwnSpace"));
+      } else if (onboardingTask === "create_folder") await newFolder();
+      else if (onboardingTask === "upload_file") {
+        const upload = $("#file-actions .upload-menu");
+        upload.open = true;
+        upload.querySelector("button")?.focus();
+      } else if (onboardingTask === "preview_file") {
+        const previewable = entries.find((entry) => entry.kind !== "folder" && !["unsupported", "pdf"].includes(FilePreview.classify(entry.name).kind));
+        if (previewable) await previewFile(previewable);
+        else toast(I18n.t("onboardingPreviewHint"));
+      }
+    }
   } catch (e) {
     $("#workspace-status").textContent = errorText(e);
     $("#workspace-status").classList.add("error");

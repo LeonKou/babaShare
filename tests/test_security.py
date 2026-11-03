@@ -38,7 +38,7 @@ class SecurityHttpTests(unittest.TestCase):
             raise AssertionError((status, user))
         cls.users["admin"] = user
         cls.cookies["admin"] = headers["set-cookie"].split(";", 1)[0]
-        for name, role in (("owner", "editor"), ("peer", "editor"), ("viewer", "viewer")):
+        for name, role in (("owner", "editor"), ("peer", "editor"), ("viewer", "editor")):
             status, user, _ = cls.request("POST", "/user", actor="admin", body={"userName": "qa-" + name, "password": password, "role": role})
             if status != 200:
                 raise AssertionError((status, user))
@@ -87,8 +87,8 @@ class SecurityHttpTests(unittest.TestCase):
 
     def setUp(self):
         self.workspace = self.ok("POST", "/workspace", "owner", {"workspaceName": self._testMethodName})["id"]
-        for actor, collaborate in (("peer", False), ("viewer", True)):
-            self.ok("POST", "/member", "owner", {"workspaceId": self.workspace, "userId": self.users[actor]["id"], "collaborate": collaborate})
+        for actor, member_role in (("peer", "editor"), ("viewer", "viewer")):
+            self.ok("POST", "/member", "owner", {"workspaceId": self.workspace, "userId": self.users[actor]["id"], "memberRole": member_role})
 
     def ok(self, method, route, actor=None, body=None, query=None):
         status, data, _ = self.request(method, route, actor, body, query)
@@ -105,17 +105,17 @@ class SecurityHttpTests(unittest.TestCase):
         self.assertEqual(data["code"], status)
         return data
 
-    def test_viewer_readonly_even_collaborate(self):
+    def test_workspace_viewer_readonly_despite_global_editor(self):
         self.file("site/index.html")
         mutations = [
-            ("POST", "/workspace", {"workspaceName": "viewer-forbidden"}, None),
+            ("PATCH", "/workspace", {"id": self.workspace, "workspaceName": "viewer-forbidden"}, None),
             ("POST", "/folder", {"workspaceId": self.workspace, "path": "new"}, None),
             ("PUT", "/file/content", {"workspaceId": self.workspace, "path": "site/index.html", "content": "changed"}, None),
             ("POST", "/file/upload", {"workspaceId": self.workspace, "files": [{"path": "x.txt", "contentBase64": "eA=="}]}, None),
             ("PATCH", "/file", {"workspaceId": self.workspace, "path": "site/index.html", "newPath": "x.html"}, None),
             ("DELETE", "/folder", None, {"workspaceId": self.workspace, "path": "site"}),
             ("POST", "/share", {"workspaceId": self.workspace, "path": "site"}, None),
-            ("PATCH", "/member", {"workspaceId": self.workspace, "userId": self.users["peer"]["id"], "collaborate": True}, None),
+            ("PATCH", "/member", {"workspaceId": self.workspace, "userId": self.users["peer"]["id"], "memberRole": "manager"}, None),
         ]
         for method, route, body, query in mutations:
             with self.subTest(method=method, route=route):
@@ -147,7 +147,7 @@ class SecurityHttpTests(unittest.TestCase):
 
     def test_collaborator_can_write_foreign_files(self):
         self.file("shared/owner.txt")
-        self.ok("PATCH", "/member", "owner", {"workspaceId": self.workspace, "userId": self.users["peer"]["id"], "collaborate": True})
+        self.ok("PATCH", "/member", "owner", {"workspaceId": self.workspace, "userId": self.users["peer"]["id"], "memberRole": "manager"})
         self.file("shared/owner.txt", "peer", "协作修改")
         self.ok("DELETE", "/folder", "peer", query={"workspaceId": self.workspace, "path": "shared"})
 
@@ -194,7 +194,7 @@ class SecurityHttpTests(unittest.TestCase):
         ]:
             with self.subTest(method=method, route=route):
                 self.denied(method, route, "peer", body, query)
-        for patch in ({"role": "viewer"}, {"isDisabled": True}):
+        for patch in ({"role": "editor"}, {"isDisabled": True}):
             self.denied("PATCH", "/user", "admin", {"id": self.users["admin"]["id"], **patch}, expected=409)
 
     def test_sqlite_actual_storage_uses_uuid_bytes_and_millisecond_integers(self):
@@ -282,7 +282,7 @@ class SecurityHttpTests(unittest.TestCase):
             self.denied("GET", "/member/list", actor, query={"workspaceId": private_workspace})
         self.ok("GET", "/member/list", "admin", query={"workspaceId": private_workspace})
         for actor in ("peer", "viewer"):
-            self.denied("PATCH", "/member", actor, {"workspaceId": self.workspace, "userId": self.users["peer"]["id"], "collaborate": True})
+            self.denied("PATCH", "/member", actor, {"workspaceId": self.workspace, "userId": self.users["peer"]["id"], "memberRole": "manager"})
             self.denied("DELETE", "/member", actor, query={"workspaceId": self.workspace, "userId": self.users["viewer"]["id"]})
 
     def test_paths_reject_escape_and_windows_aliases(self):
@@ -533,7 +533,7 @@ assert.equal(get('#shared-frame').src,undefined);
         self.assertEqual((status, data["status"]), (401, "LOGIN_FAILED"))
         status, data, _ = self.request("GET", "/session/detail", headers={**headers, "Cookie": "baba_share_session=expired"})
         self.assertEqual((status, data["status"]), (401, "AUTH_REQUIRED"))
-        status, data, _ = self.request("POST", "/workspace", "viewer", {"workspaceName": "still-readonly"}, headers=headers)
+        status, data, _ = self.request("POST", "/folder", "viewer", {"workspaceId": self.workspace, "path": "still-readonly"}, headers=headers)
         self.assertEqual((status, data["status"]), (403, "READ_ONLY"))
         self.assertEqual(self.request("GET", "/session/detail", actor="viewer", headers=headers)[0], 200)
 
@@ -586,7 +586,8 @@ const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const assets=process.argv[1],origin='http://127.0.0.1:12345';
 class Element {
  constructor(tag='div'){this.tag=tag;this.children=[];this.events={};this.dataset={};this.style={};this.value='';this.textContent='';this.disabled=false;this.attributes={};this.classList={add(){},remove(){},toggle(){}};}
- append(...items){this.children.push(...items.filter(x=>x!=null));}
+ append(...items){for(const item of items.filter(x=>x!=null)){if(typeof item==='object')item.parentElement=this;this.children.push(item);}}
+ replaceWith(node){const parent=this.parentElement;if(!parent)return;const index=parent.children.indexOf(this);if(index>=0){parent.children.splice(index,1,node);node.parentElement=parent;this.parentElement=null;}}
  prepend(...items){this.children.unshift(...items);}
  replaceChildren(...items){this.children=[];this.append(...items);}
  setAttribute(k,v){this.attributes[k]=v;if(k==='value')this.value=v;if(k==='name')this.name=v;if(k==='id')this.id=v;}
@@ -596,6 +597,7 @@ class Element {
  removeEventListener(k,fn){if(this.events[k]===fn)delete this.events[k];}
  querySelector(){return null;}
  querySelectorAll(){return [];}
+ contains(node){return node===this||this.children.some(child=>typeof child==='object'&&child.contains(node));}
  get elements(){const found=[];const walk=n=>{if(n.name)found.push(n);for(const x of n.children||[])if(typeof x==='object')walk(x);};walk(this);found.namedItem=name=>found.find(x=>x.name===name);return found;}
 }
 function runtime(path='workspace.html'){
@@ -645,8 +647,8 @@ const settle=()=>new Promise(resolve=>setImmediate(resolve));
   const childProxy={postMessage:message=>queueMicrotask(()=>dispatch(child,{origin,source:hostProxy,data:message}))};
   child.context.parent=hostProxy;host.get('#page-frame').contentWindow=childProxy;
   host.load('bridge-core.js');host.load('app-bridge.js');child.load('bridge-core.js');child.load('page-bridge.js');
-  host.context.API=async key=>key==='install'?{setupRequired:false}:key==='me'?{nickname:'Viewer',role:'viewer'}:[];
-  await host.load('shell.js');assert.equal(host.get('#new-workspace').hidden,true);
+  host.context.API=async key=>key==='install'?{setupRequired:false}:key==='me'?{nickname:'Editor',role:'editor'}:[];
+  await host.load('shell.js');assert.equal(host.get('#new-workspace').hidden,false);
   const page=child.context.UI.page();await page.ready;assert.equal(page.embedded,true);page.setDirty(true);
   await Promise.allSettled([child.context.API('me'),child.context.API('workspaces'),host.context.UI.sessionExpired()]);
   assert.equal(child.replaces.length,0);assert.deepEqual(host.replaces,[origin+'/baba-share/auth.html']);assert.equal(page.dirty,false);
@@ -655,7 +657,7 @@ const settle=()=>new Promise(resolve=>setImmediate(resolve));
  // 退出401已无有效会话；403/网络未确认退出，均不阻塞返回登录。
  for(const code of [200,401,403,'network']){
   const r=runtime('index.html'),api=r.context.API;r.load('bridge-core.js');r.load('app-bridge.js');
-  r.context.API=async key=>key==='install'?{setupRequired:false}:key==='me'?{nickname:'Viewer',role:'viewer'}:[];
+  r.context.API=async key=>key==='install'?{setupRequired:false}:key==='me'?{nickname:'Editor',role:'editor'}:[];
   await r.load('shell.js');r.context.API=api;
   r.context.code=code;r.context.data=code===403?{status:'ORIGIN_DENIED'}:code===401?{status:'AUTH_REQUIRED'}:{};
   if(code==='network')r.context.fetch=async()=>{throw new TypeError('offline')};

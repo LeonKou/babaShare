@@ -43,11 +43,12 @@
       I18n.t("mcpReadmePermissions"),
       I18n.t("mcpReadmeTools"),
       [
-        "workspace_list, workspace_create, workspace_change, workspace_delete",
+        "directory_tree, workspace_list, workspace_create, workspace_change, workspace_delete",
         "node_list, folder_create, file_read, file_write, file_upload",
         "file_move, folder_move, file_delete, folder_delete",
         "share_list, share_create, share_revoke, member_list, member_change, member_delete",
       ].join("\n"),
+      I18n.t("mcpDirectorySelection"),
       I18n.t("mcpReadmeToolHints"),
       I18n.t("mcpUploadConflict"),
       I18n.t("mcpUseVerify"),

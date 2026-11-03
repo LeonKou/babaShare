@@ -96,6 +96,40 @@ class RuntimeTests(unittest.TestCase):
                 Preflight(config).run()
             self.assertFalse((config.root / "data" / "mcp-key-master").exists())
 
+    def test_preflight_checks_every_derived_key_and_preserves_master(self):
+        from backend.repository import db_id
+        from backend.service import Service
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.config(directory)
+            service = Service(config)
+            account = service.account({"userName": "preflight-admin", "password": "preflight-password"}, "setup")
+            user = service.repo.user(account["id"])
+            service.mcp_key_create(user, {"keyName": "有效", "requestId": "valid-preflight-1"})
+            damaged = service.mcp_key_create(user, {"keyName": "损坏", "requestId": "damaged-preflight-1"})
+            master = config.root / "data/mcp-key-master"
+            original_master = master.read_bytes()
+            Preflight(config).run()
+            service.repo.execute("UPDATE auth_mcp_key SET key_hash=? WHERE id=?", ("0" * 64, db_id(damaged["id"])))
+            with self.assertRaisesRegex(RuntimeError, "主密钥.*不匹配"):
+                Preflight(config).run()
+            self.assertEqual(master.read_bytes(), original_master)
+            self.assertEqual(len(service.mcp_keys(user)), 2)
+
+    def test_preflight_rejects_invalid_derived_models_without_filtering(self):
+        from backend.repository import new_id
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.config(directory)
+            row = {"id": new_id(), "user_id": new_id(), "key_hash": "0" * 64,
+                   "mcp_derivation_version": "hmac-sha256-v1", "mcp_derivation_nonce": "a" * 64}
+            for changes in ({"mcp_derivation_version": None}, {"mcp_derivation_nonce": None},
+                            {"mcp_derivation_version": "unsupported"}, {"mcp_derivation_nonce": "g" * 64}):
+                with self.subTest(changes=changes):
+                    with mock.patch("backend.runtime.Repository.all", return_value=[{**row, **changes}]) as query:
+                        with self.assertRaisesRegex(RuntimeError, "派生信息无效"):
+                            Preflight(config).run()
+                    self.assertNotIn("IS NOT NULL", query.call_args.args[0])
+                    self.assertFalse((config.root / "data/mcp-key-master").exists())
+
     def test_existing_master_is_never_recreated(self):
         with tempfile.TemporaryDirectory() as directory:
             config = self.config(directory)

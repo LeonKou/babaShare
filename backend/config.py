@@ -58,12 +58,6 @@ class Config:
         for path in (self.root, self.root / "data", self.root / "filedb"):
             if path.exists() and not path.is_dir():
                 raise ValueError(f"数据路径存在但不是目录：{path}")
-        legacy_database = self.root / "data" / "product-share.sqlite3"
-        if legacy_database.exists() or legacy_database.is_symlink():
-            raise ValueError(
-                f"发现旧数据库：{legacy_database}；请先备份整个数据目录并人工确认唯一数据库及配套filedb。"
-                "已拒绝启动，不会自动读取、迁移、删除旧库或新建空库。"
-            )
         try:
             (self.root / "data").mkdir(parents=True, exist_ok=True)
             (self.root / "filedb").mkdir(parents=True, exist_ok=True)

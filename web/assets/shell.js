@@ -1,12 +1,32 @@
 (async () => {
   "use strict";
-  const { $, el, button, icon, toast, formDialog, errorText } = UI;
+  const { $, el, button, icon, toast, errorText } = UI;
   const iframe = $("#page-frame");
   let user = null,
     workspaces = [],
     active = { routeId: "workspace", params: {} },
     navigating = false,
     host;
+  let onboarding = null, onboardingRequest = null;
+  async function refreshOnboarding() {
+    if (!user || user.role === "admin") return;
+    if (onboardingRequest) return onboardingRequest;
+    onboardingRequest = API("onboarding").then((value) => {
+      const keys = ["enter_workspace", "create_folder", "upload_file", "preview_file", "create_mcp_key", "mcp_tool_call"];
+      if (value?.version !== 1 || typeof value.enabled !== "boolean" || !Array.isArray(value.tasks)) throw new Error("INVALID_RESPONSE");
+      if (value.totalCount !== keys.length || value.tasks.length !== keys.length ||
+        new Set(value.tasks.map((task) => task?.key)).size !== keys.length ||
+        !value.tasks.every((task) => keys.includes(task?.key) && typeof task.completed === "boolean") ||
+        !Number.isInteger(value.completedCount) || value.completedCount < 0 || value.completedCount > keys.length ||
+        value.completedCount !== value.tasks.filter((task) => task.completed).length ||
+        value.allComplete !== (value.completedCount === keys.length)) throw new Error("INVALID_RESPONSE");
+      onboarding = value;
+      renderNav();
+    }).catch(() => { onboarding = null; renderNav(); console.warn("Onboarding status unavailable"); })
+      .finally(() => { onboardingRequest = null; });
+    return onboardingRequest;
+  }
+  window.addEventListener("focus", refreshOnboarding);
   UI.settingsControls($("#shell-controls"));
   $("#new-workspace-icon").append(icon("plus"));
   $("#logout-icon").append(icon("logout"));
@@ -61,6 +81,12 @@
       "workspace.changed": async () => {
         workspaces = await API("workspaces");
         renderNav();
+        await refreshOnboarding();
+        return true;
+      },
+      "onboarding.changed": async (payload) => {
+        if (payload?.version !== 1) return false;
+        await refreshOnboarding();
         return true;
       },
     },
@@ -99,9 +125,19 @@
     if (!workspaces.length)
       $("#workspace-nav").append(navItem("allFiles", "workspace"));
     $("#account-nav").replaceChildren(navItem("account", "account"));
+    if (user && user.role !== "admin" && onboarding?.enabled !== false) {
+      const entry = navItem("onboarding", "onboarding");
+      if (onboarding && !onboarding.dismissed) {
+        const label = onboarding.allComplete ? I18n.t("onboardingUnlocked") : I18n.t("onboardingProgress", { count: onboarding.completedCount, total: onboarding.totalCount });
+        entry.append(el("bdi", { class: "small num", dir: "ltr", text: I18n.t("onboardingProgress", { count: onboarding.completedCount, total: onboarding.totalCount }) }));
+        entry.setAttribute("title", label);
+        entry.setAttribute("aria-label", I18n.t("onboarding") + " · " + label);
+      }
+      $("#account-nav").append(entry);
+    }
     if (user?.role === "admin")
       $("#account-nav").append(navItem("users", "users"), navItem("workspace-admin", "workspace-admin"), navItem("settings", "settings"));
-    $("#new-workspace").hidden = user?.role === "viewer";
+    $("#new-workspace").hidden = !["admin", "editor"].includes(user?.role);
     $("#shell-account").replaceChildren(
       el("span", {
         class: "avatar",
@@ -125,29 +161,9 @@
     host.emit("context.changed", ctx);
     renderNav();
   });
-  $("#new-workspace").addEventListener("click", async () => {
-    const result = await formDialog(
-      I18n.t("newWorkspace"),
-      [
-        {
-          key: "workspaceName",
-          name: "workspaceName",
-          required: true,
-          validator: (value) =>
-            value.trim().length > 100 ? I18n.t("invalidInput") : "",
-        },
-      ],
-      (values) => API("workspace", { method: "POST", body: values }),
-      { saveKey: "create" },
-    );
-    if (result) {
-      workspaces = await API("workspaces");
-      renderNav();
-      await navigate({
-        routeId: "workspace",
-        params: { workspaceId: result.id },
-      });
-    }
+  $("#new-workspace").addEventListener("click", () => {
+    if (!user || !["admin", "editor"].includes(user.role)) return;
+    return navigate({ routeId: "workspace", params: { action: "create" } });
   });
   let loggingOut = false;
   $("#logout").addEventListener("click", async () => {
@@ -180,8 +196,9 @@
     }
     user = await API("me");
     workspaces = await API("workspaces");
+    await refreshOnboarding();
     const url = new URL(location.href),
-      routeId = ["workspace", "account", "users", "settings", "workspace-admin"].includes(
+      routeId = ["workspace", "account", "onboarding", "users", "settings", "workspace-admin"].includes(
         url.searchParams.get("route"),
       )
         ? url.searchParams.get("route")

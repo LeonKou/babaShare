@@ -1,0 +1,276 @@
+{
+  "version": "1.16.0",
+  "generated": "2026-11-03T10:19:01",
+  "root": "E:\\work\\AI\\productShare",
+  "counts": {
+    "routes": 27,
+    "tables": 0,
+    "entities": 0,
+    "frontend": 2
+  },
+  "routes": [
+    {
+      "method": "GET",
+      "path": "accountTab",
+      "norm": "accounttab",
+      "file": "web/assets/account.js",
+      "line": 37,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "mcpPageIndex",
+      "norm": "mcppageindex",
+      "file": "web/assets/account.js",
+      "line": 183,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "mcpPageSize",
+      "norm": "mcppagesize",
+      "file": "web/assets/account.js",
+      "line": 184,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "mcpPageSize",
+      "norm": "mcppagesize",
+      "file": "web/assets/account.js",
+      "line": 184,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "mcpStatus",
+      "norm": "mcpstatus",
+      "file": "web/assets/account.js",
+      "line": 185,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "logout",
+      "norm": "logout",
+      "file": "web/assets/auth.js",
+      "line": 15,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "mode",
+      "norm": "mode",
+      "file": "web/assets/auth.js",
+      "line": 241,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "pageIndex",
+      "norm": "pageindex",
+      "file": "web/assets/pagination.js",
+      "line": 38,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "pageSize",
+      "norm": "pagesize",
+      "file": "web/assets/pagination.js",
+      "line": 40,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "pageSize",
+      "norm": "pagesize",
+      "file": "web/assets/pagination.js",
+      "line": 41,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "Content-Length",
+      "norm": "content-length",
+      "file": "web/assets/preview.js",
+      "line": 36,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "file",
+      "norm": "file",
+      "file": "web/assets/share.js",
+      "line": 277,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "route",
+      "norm": "route",
+      "file": "web/assets/shell.js",
+      "line": 202,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "route",
+      "norm": "route",
+      "file": "web/assets/shell.js",
+      "line": 204,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "workspaceId",
+      "norm": "workspaceid",
+      "file": "web/assets/shell.js",
+      "line": 207,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "DELETE",
+      "path": "workspaceId",
+      "norm": "workspaceid",
+      "file": "web/assets/workspace.js",
+      "line": 34,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "DELETE",
+      "path": "search",
+      "norm": "search",
+      "file": "web/assets/workspace.js",
+      "line": 38,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "path",
+      "norm": "path",
+      "file": "web/assets/workspace.js",
+      "line": 45,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "search",
+      "norm": "search",
+      "file": "web/assets/workspace.js",
+      "line": 46,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "sort",
+      "norm": "sort",
+      "file": "web/assets/workspace.js",
+      "line": 47,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "sort",
+      "norm": "sort",
+      "file": "web/assets/workspace.js",
+      "line": 48,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "order",
+      "norm": "order",
+      "file": "web/assets/workspace.js",
+      "line": 50,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "workspaceId",
+      "norm": "workspaceid",
+      "file": "web/assets/workspace.js",
+      "line": 1124,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "action",
+      "norm": "action",
+      "file": "web/assets/workspace.js",
+      "line": 1125,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "GET",
+      "path": "onboardingTask",
+      "norm": "onboardingtask",
+      "file": "web/assets/workspace.js",
+      "line": 1126,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "DELETE",
+      "path": "onboardingTask",
+      "norm": "onboardingtask",
+      "file": "web/assets/workspace.js",
+      "line": 1128,
+      "source": "node",
+      "incomplete": true
+    },
+    {
+      "method": "DELETE",
+      "path": "action",
+      "norm": "action",
+      "file": "web/assets/workspace.js",
+      "line": 1132,
+      "source": "node",
+      "incomplete": true
+    }
+  ],
+  "tables": [],
+  "entities": [],
+  "frontend": [
+    {
+      "url": "/api/baba-share/core/v1",
+      "norm": "/api/baba-share/core/v1",
+      "method": "",
+      "file": "web/assets/api.js",
+      "line": 5,
+      "dynamic": false
+    },
+    {
+      "url": "/api/baba-share/core/v1",
+      "norm": "/api/baba-share/core/v1",
+      "method": "",
+      "file": "web/assets/mcp-help.js",
+      "line": 5,
+      "dynamic": false
+    }
+  ]
+}

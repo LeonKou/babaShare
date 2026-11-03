@@ -79,7 +79,17 @@ class MCPTests(unittest.TestCase):
         return self.request("POST", "/mcp", body=body, key=key, headers=headers)
 
     def call(self, key, name, arguments=None):
-        status, result, _ = self.rpc(key, "tools/call", {"name": name, "arguments": arguments or {}})
+        arguments = dict(arguments or {})
+        if name in ("folder_create", "file_write", "file_upload") and "workspaceId" in arguments:
+            workspace_id = arguments.pop("workspaceId")
+            path = arguments.pop("path", "")
+            snapshot = self.call(key, "directory_tree")["result"]["structuredContent"]
+            target_path = path if name == "file_upload" else ""
+            target = next((node for node in snapshot["nodes"] if node["workspaceId"] == workspace_id and node["path"] == target_path), None)
+            arguments.update(treeToken=snapshot["treeToken"], targetId=target["targetId"] if target else "unavailable")
+            if name != "file_upload":
+                arguments["relativePath"] = path
+        status, result, _ = self.rpc(key, "tools/call", {"name": name, "arguments": arguments})
         self.assertEqual(status, 200, result)
         return result
 
@@ -134,14 +144,40 @@ class MCPTests(unittest.TestCase):
         self.app.service.mcp_key_delete(self.admin, key["id"])
         self.assertEqual(self.request("POST", "/mcp-key/content", {"id": key["id"]}, cookie=self.cookie)[1]["status"], "MCP_KEY_NOT_EXIST")
 
-    def test_old_key_and_master_loss_fail_closed(self):
+    def test_invalid_derived_model_and_master_loss_fail_closed(self):
         key = self.create_key()
-        self.app.service.repo.execute("UPDATE auth_mcp_key SET mcp_derivation_version=NULL,mcp_derivation_nonce=NULL WHERE id=?", (db_id(key["id"]),))
-        self.assertEqual(self.request("POST", "/mcp-key/content", {"id": key["id"]}, cookie=self.cookie)[1]["status"], "MCP_KEY_NOT_RECOVERABLE")
-        fresh = self.create_key(name="master-loss")
+        service = self.app.service
+        row = service.repo.one("SELECT id,user_id,key_hash,mcp_derivation_version,mcp_derivation_nonce FROM auth_mcp_key WHERE id=?", (db_id(key["id"]),))
+        for changes in ({"mcp_derivation_version": None}, {"mcp_derivation_nonce": None},
+                        {"mcp_derivation_version": "invalid-version"}, {"mcp_derivation_nonce": "g" * 64},
+                        {"mcp_derivation_nonce": "A" * 64}, {"mcp_derivation_nonce": "a" * 63},
+                        {"key_hash": None}, {"key_hash": "z" * 64}, {"key_hash": "0" * 64}):
+            with self.subTest(changes=changes):
+                with self.assertRaises(BizError) as raised:
+                    service.mcp_stored_key({**row, **changes})
+                self.assertEqual((raised.exception.code, raised.exception.status), (503, "MCP_KEY_RECOVERY_UNAVAILABLE"))
         master = self.config.root / "data/mcp-key-master"
         master.unlink()
-        self.assertEqual(self.request("POST", "/mcp-key/content", {"id": fresh["id"]}, cookie=self.cookie)[1]["status"], "MCP_KEY_RECOVERY_UNAVAILABLE")
+        self.assertEqual(self.request("POST", "/mcp-key/content", {"id": key["id"]}, cookie=self.cookie)[1]["status"], "MCP_KEY_RECOVERY_UNAVAILABLE")
+        self.assertFalse(master.exists())
+
+    def test_derived_digest_validation_uses_constant_time_comparison(self):
+        key = self.create_key()
+        service = self.app.service
+        with mock.patch("backend.service.hmac.compare_digest", wraps=hmac.compare_digest) as compare:
+            self.assertEqual(service.mcp_key_content(self.admin, key["id"])["key"], key["key"])
+        compare.assert_called_once_with(digest(key["key"]), digest(key["key"]))
+
+    def test_create_validates_every_stored_key_before_writing(self):
+        first, damaged = self.create_key(), self.create_key(name="损坏派生信息")
+        master = self.config.root / "data/mcp-key-master"
+        original_master = master.read_bytes()
+        self.app.service.repo.execute("UPDATE auth_mcp_key SET key_hash=? WHERE id=?", ("0" * 64, db_id(damaged["id"])))
+        status, result, _ = self.request("POST", "/mcp-key", {"keyName": "拒绝创建", "requestId": secrets.token_hex(16)}, cookie=self.cookie)
+        self.assertEqual((status, result["status"]), (503, "MCP_KEY_RECOVERY_UNAVAILABLE"))
+        self.assertEqual(len(self.app.service.mcp_keys(self.admin)), 2)
+        self.assertEqual(master.read_bytes(), original_master)
+        self.assertEqual(self.request("POST", "/mcp-key/content", {"id": first["id"]}, cookie=self.cookie)[1]["key"], first["key"])
 
     def test_master_replacement_corruption_permissions_and_symlink_fail_closed(self):
         key = self.create_key()
@@ -185,24 +221,20 @@ class MCPTests(unittest.TestCase):
         self.assertNotIn(key["key"], json.dumps(response) + "".join(captured.output))
         self.assertEqual(self.request("POST", "/mcp-key/content", {"id": key["id"]}, cookie=self.cookie)[1]["key"], key["key"])
 
-    def test_legacy_database_migration_is_nullable_and_master_is_lazy(self):
-        with tempfile.TemporaryDirectory(prefix="baba-share-old-db-") as root:
-            config = Config(Path(root), port=1)
-            connection = sqlite3.connect(config.database_path)
-            try:
-                connection.execute("CREATE TABLE auth_mcp_key (id BLOB PRIMARY KEY,user_id BLOB NOT NULL,key_name TEXT NOT NULL,key_prefix TEXT NOT NULL,key_hash TEXT NOT NULL,request_id TEXT NOT NULL,request_hash TEXT NOT NULL,expire_time BIGINT,revoked_time BIGINT,create_time BIGINT NOT NULL,update_time BIGINT NOT NULL)")
-                connection.commit()
-            finally:
-                connection.close()
-            Repository(config.database_path)
-            connection = sqlite3.connect(config.database_path)
-            try:
-                columns = {row[1]: row for row in connection.execute("PRAGMA table_info(auth_mcp_key)")}
-            finally:
-                connection.close()
-            self.assertEqual(columns["mcp_derivation_version"][3], 0)
-            self.assertEqual(columns["mcp_derivation_nonce"][3], 0)
-            self.assertFalse((config.root / "data/mcp-key-master").exists())
+    def test_current_derived_columns_are_required_and_master_is_lazy(self):
+        self.assertFalse((self.config.root / "data/mcp-key-master").exists())
+        with self.app.service.repo.connection() as connection:
+            columns = {row[1]: row for row in connection.execute("PRAGMA table_info(auth_mcp_key)")}
+        self.assertEqual(columns["mcp_derivation_version"][3], 1)
+        self.assertEqual(columns["mcp_derivation_nonce"][3], 1)
+        key = self.create_key()
+        for version, nonce in ((None, "a" * 64), ("hmac-sha256-v1", None),
+                               ("unsupported", "a" * 64), ("hmac-sha256-v1", "g" * 64),
+                               ("hmac-sha256-v1", "A" * 64), ("hmac-sha256-v1", "a" * 63)):
+            with self.subTest(version=version, nonce=nonce), self.assertRaises(sqlite3.IntegrityError):
+                self.app.service.repo.execute("UPDATE auth_mcp_key SET mcp_derivation_version=?,mcp_derivation_nonce=? WHERE id=?",
+                                              (version, nonce, db_id(key["id"])))
+        self.assertEqual(self.request("POST", "/mcp-key/content", {"id": key["id"]}, cookie=self.cookie)[1]["key"], key["key"])
 
     def test_concurrent_http_creation_and_recovery_keep_master_and_request_id(self):
         body = {"keyName": "并发", "expireHours": None, "requestId": secrets.token_hex(16)}
@@ -222,9 +254,9 @@ class MCPTests(unittest.TestCase):
     def test_frontend_copy_uses_live_recovery_and_each_browser_origin(self):
         active = self.create_key()
         expired = self.create_key(name="expired")
-        revoked = self.create_key(name="revoked")
-        self.app.service.repo.execute("UPDATE auth_mcp_key SET expire_time=? WHERE id=?", (now_ms() - 1, db_id(expired["id"])))
-        self.app.service.repo.execute("UPDATE auth_mcp_key SET revoked_time=? WHERE id=?", (now_ms(), db_id(revoked["id"])))
+        expired_second = self.create_key(name="expired-second")
+        for key in (expired, expired_second):
+            self.app.service.repo.execute("UPDATE auth_mcp_key SET expire_time=? WHERE id=?", (now_ms() - 1, db_id(key["id"])))
         script = r'''
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const input=JSON.parse(fs.readFileSync(0,'utf8'));
@@ -246,7 +278,7 @@ const location=new URL(input.origin+'/baba-share/account.html');
 const context={console,URL,AbortController,crypto:require('crypto').webcrypto,queueMicrotask,Date,Uint8Array,
   location,history:{replaceState(){}},navigator:{clipboard:{writeText:async text=>{if(fallback)throw Error('blocked');copied.push(text);}}},
   document:{documentElement:{lang:'zh-CN',dir:'ltr',dataset:{mode:'dark'}},querySelectorAll(){return[];}},
-  UI:{$,el,button,copyButton:button,toast:t=>notices.push(t),errorText:e=>e.status||'error',date:String,empty:()=>el('div'),page:()=>({ready:Promise.resolve()}),
+  UI:{$,el,button,copyButton:button,quotaSummary:()=>el('div'),toast:t=>notices.push(t),errorText:e=>e.status||'error',date:String,empty:()=>el('div'),page:()=>({ready:Promise.resolve()}),
     confirm:async()=>deleteConfirmed,
     api:async(path,options={})=>{const url=new URL(path,input.origin);for(const [name,value]of Object.entries(options.query||{}))url.searchParams.set(name,value);const response=await fetch(url,{method:options.method||'GET',headers:{Cookie:input.cookie,Origin:input.origin,'Content-Type':'application/json'},body:options.body?JSON.stringify(options.body):undefined});const data=await response.json();if(!response.ok)throw data;return data;},
     dialog:(title,build)=>{const node=el('dialog');let resolve;const result=new Promise(r=>resolve=r);const close=()=>{node.events.close?.();resolve(null);};dialogs.push({node,close,title});build(node,close);return{result,close};}},
@@ -261,10 +293,10 @@ for(const file of ['i18n.js','api.js','pagination.js','mcp-help.js'])vm.runInCon
   const cards=$('#mcp-cards').children;
   assert.equal(cards.length,3);
   const flatten=n=>n instanceof Node?[n,...n.children.flatMap(flatten)]:[];
-  for(const card of cards){const title=flatten(card).find(n=>n.tag==='h3').textContent;const b=flatten(card).find(n=>n.textContent==='mcpCopyUse');assert(b);assert.equal(b.disabled,title==='expired'||title==='revoked');}
+  for(const card of cards){const title=flatten(card).find(n=>n.tag==='h3').textContent;const b=flatten(card).find(n=>n.textContent==='mcpCopyUse');assert(b);assert.equal(b.disabled,title.startsWith('expired'));}
   for(const locale of ['zh-CN','en-US','ar-SA']){
     context.I18n.apply({locale,theme:'dark'});
-    assert.notEqual(context.I18n.t('MCP_KEY_NOT_RECOVERABLE'),'MCP_KEY_NOT_RECOVERABLE');
+    assert.notEqual(context.I18n.t('MCP_KEY_RECOVERY_UNAVAILABLE'),'MCP_KEY_RECOVERY_UNAVAILABLE');
     for(const origin of ['https://tenant.example:9443','http://127.0.0.1:18099','https://other.example']){
       context.location=new URL(origin+'/baba-share/account.html');
       await context.McpHelp.copyUse(input.id);
@@ -283,10 +315,10 @@ for(const file of ['i18n.js','api.js','pagination.js','mcp-help.js'])vm.runInCon
   await assert.rejects(context.McpHelp.copyUse(input.id),e=>e.status==='mcpUnavailable');
   context.location=new URL(input.origin+'/baba-share/account.html');
   const findDelete=title=>flatten($('#mcp-cards')).find(n=>n.tag==='article'&&flatten(n).some(c=>c.tag==='h3'&&c.textContent===title));
-  let oldCard=findDelete('revoked');assert(oldCard);let remove=flatten(oldCard).find(n=>n.textContent==='delete');assert(remove);await remove.fn();assert(findDelete('revoked'));
-  deleteConfirmed=true;await remove.fn();assert(!findDelete('revoked'));assert.equal($('#mcp-cards').children.length,2);
+  let oldCard=findDelete('expired-second');assert(oldCard);let remove=flatten(oldCard).find(n=>n.textContent==='delete');assert(remove);await remove.fn();assert(findDelete('expired-second'));
+  deleteConfirmed=true;await remove.fn();assert(!findDelete('expired-second'));assert.equal($('#mcp-cards').children.length,2);
   const expiredCard=findDelete('expired');await flatten(expiredCard).find(n=>n.textContent==='delete').fn();assert(!findDelete('expired'));assert.equal($('#mcp-cards').children.length,1);
-  process.stdout.write('前端真实HTTP复制、动态origin与历史撤销及过期Key删除验证通过');
+  process.stdout.write('前端真实HTTP复制、动态origin与过期Key物理删除验证通过');
 })().catch(e=>{console.error(e.name,String(e.stack).split('\n').find(line=>/^\s+at /.test(line))||'');process.exit(1);});
 '''
         result = subprocess.run(["node", "-e", script], input=json.dumps({"origin": self.config.public_origin,
@@ -294,7 +326,7 @@ for(const file of ['i18n.js','api.js','pagination.js','mcp-help.js'])vm.runInCon
                                 "assets": str(self.config.web_dir / "assets")}), capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_key_limits_expiry_revocation_and_owner_scope(self):
+    def test_key_limits_expiry_deletion_and_owner_scope(self):
         keys = [self.create_key(name=str(index)) for index in range(10)]
         body = {"keyName": "超额", "expireHours": 1, "requestId": str(uuid.uuid4())}
         self.assertEqual(self.request("POST", "/mcp-key", body, cookie=self.cookie)[1]["status"], "MCP_KEY_LIMIT")
@@ -362,7 +394,7 @@ for(const file of ['i18n.js','api.js','pagination.js','mcp-help.js'])vm.runInCon
         self.config.max_body_bytes = 10
         self.assertEqual(self.rpc(key, "ping")[0], 413)
 
-    def test_legacy_batch_and_common_metadata(self):
+    def test_negotiated_protocol_batch_and_common_metadata(self):
         key = self.create_key()["key"]
         batch = [{"jsonrpc": "2.0", "id": 1, "method": "ping"},
                  {"jsonrpc": "2.0", "method": "notifications/initialized"},
@@ -392,6 +424,7 @@ for(const file of ['i18n.js','api.js','pagination.js','mcp-help.js'])vm.runInCon
         files = [{"path": path, "contentBase64": base64.b64encode(content.encode()).decode()}
                  for path, content in (("index.html", "<link href='assets/style.css' rel='stylesheet'>"),
                                        ("assets/style.css", "body{color:red}"))]
+        self.call(key, "folder_create", {"workspaceId": workspace, "path": "site"})
         args = {"workspaceId": workspace, "path": "site", "files": files}
         self.assertFalse(self.call(key, "file_upload", args)["result"]["isError"])
         self.assertTrue((self.config.root / "filedb" / workspace / "site/assets/style.css").is_file())
@@ -414,10 +447,11 @@ for(const file of ['i18n.js','api.js','pagination.js','mcp-help.js'])vm.runInCon
         key = self.create_key()["key"]
         workspace = self.call(key, "workspace_create", {"workspaceName": "冲突策略"})["result"]["structuredContent"]["id"]
         tools = self.rpc(key, "tools/list")[1]["result"]["tools"]
-        self.assertEqual(len(tools), 19)
+        self.assertEqual(len(tools), 20)
         schema = next(item for item in tools if item["name"] == "file_upload")["inputSchema"]
         self.assertEqual(schema["properties"]["conflictPolicy"]["enum"], ["ask", "overwrite", "rename"])
         self.assertEqual(schema["properties"]["conflictPolicy"]["default"], "ask")
+        self.call(key, "folder_create", {"workspaceId": workspace, "path": "site"})
         args = {"workspaceId": workspace, "path": "site", "files": [{"path": "index.html", "contentBase64": "b2xk"}]}
         self.assertEqual(self.call(key, "file_upload", args)["result"]["structuredContent"]["count"], 1)
         args["files"] = [{"path": "assets/new.js", "contentBase64": "anM="}, {"path": "index.html", "contentBase64": "bmV3"}]
@@ -444,12 +478,12 @@ for(const file of ['i18n.js','api.js','pagination.js','mcp-help.js'])vm.runInCon
 
     def test_upload_policies_never_bypass_mcp_ownership_or_viewer(self):
         editor, editor_cookie = self.account("conflict-editor")
-        viewer, viewer_cookie = self.account("conflict-viewer", role="viewer")
+        viewer, viewer_cookie = self.account("conflict-viewer", role="editor")
         editor_key, viewer_key = self.create_key(cookie=editor_cookie)["key"], self.create_key(cookie=viewer_cookie)["key"]
         workspace = self.app.service.workspace_create(self.admin, {"workspaceName": "冲突权限"})["id"]
         self.app.service.file_write(self.admin, {"workspaceId": workspace, "path": "owned.txt", "content": "owner"})
-        for user in (editor, viewer):
-            self.app.service.member_change(self.admin, {"workspaceId": workspace, "userId": user["id"]})
+        for user, member_role in ((editor, "editor"), (viewer, "viewer")):
+            self.app.service.member_change(self.admin, {"workspaceId": workspace, "userId": user["id"], "memberRole": member_role})
         for policy in ("ask", "overwrite", "rename"):
             args = {"workspaceId": workspace, "conflictPolicy": policy, "requestId": "mcp-permission-test", "files": [
                 {"path": "new/first.txt", "contentBase64": "YQ=="}, {"path": "owned.txt", "contentBase64": "Yg=="}]}
@@ -462,7 +496,7 @@ for(const file of ['i18n.js','api.js','pagination.js','mcp-help.js'])vm.runInCon
     def test_tools_respect_membership_foreign_content_and_role_changes(self):
         owner, owner_cookie = self.account("owner")
         editor, editor_cookie = self.account("editor")
-        viewer, viewer_cookie = self.account("viewer", role="viewer")
+        viewer, viewer_cookie = self.account("viewer", role="editor")
         owner_key = self.create_key(cookie=owner_cookie)["key"]
         editor_key = self.create_key(cookie=editor_cookie)["key"]
         viewer_key = self.create_key(cookie=viewer_cookie)["key"]
@@ -470,13 +504,13 @@ for(const file of ['i18n.js','api.js','pagination.js','mcp-help.js'])vm.runInCon
         self.app.service.file_write(owner, {"workspaceId": workspace, "path": "index.html", "content": "owner"})
         args = {"workspaceId": workspace, "path": "index.html", "content": "changed"}
         self.assertTrue(self.call(editor_key, "file_write", args)["result"]["isError"])
-        for member in (editor, viewer):
-            self.app.service.member_change(owner, {"workspaceId": workspace, "userId": member["id"]})
+        for member, member_role in ((editor, "editor"), (viewer, "viewer")):
+            self.app.service.member_change(owner, {"workspaceId": workspace, "userId": member["id"], "memberRole": member_role})
         self.assertEqual(self.call(editor_key, "file_write", args)["result"]["structuredContent"]["status"], "FOREIGN_CONTENT")
         self.assertEqual(self.call(viewer_key, "file_write", args)["result"]["structuredContent"]["status"], "READ_ONLY")
-        self.app.service.member_change(owner, {"workspaceId": workspace, "userId": editor["id"], "collaborate": True})
+        self.app.service.member_change(owner, {"workspaceId": workspace, "userId": editor["id"], "memberRole": "manager"})
         self.assertFalse(self.call(editor_key, "file_write", args)["result"]["isError"])
-        self.app.service.change_user(self.admin, {"id": editor["id"], "role": "viewer"})
+        self.app.service.member_change(owner, {"workspaceId": workspace, "userId": editor["id"], "memberRole": "viewer"})
         self.assertEqual(self.call(editor_key, "file_write", args)["result"]["structuredContent"]["status"], "READ_ONLY")
         self.app.service.member_delete(owner, workspace, viewer["id"])
         self.assertTrue(self.call(viewer_key, "file_read", {"workspaceId": workspace, "path": "index.html"})["result"]["isError"])

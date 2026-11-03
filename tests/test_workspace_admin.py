@@ -1,9 +1,7 @@
 """管理员物理删除与资产托管专项；所有数据仅存于临时目录。"""
 import base64
-from contextlib import closing
 import http.client
 import json
-import sqlite3
 import tempfile
 import threading
 import unittest
@@ -14,7 +12,7 @@ from urllib.parse import urlencode
 
 from backend.config import Config
 from backend.controller import Application, BASE, COOKIE_NAME
-from backend.repository import Repository, SCHEMA, db_id, new_id, now_ms
+from backend.repository import Repository, db_id, new_id, now_ms
 from backend.service import BizError, Service, digest
 
 
@@ -29,11 +27,11 @@ class WorkspaceAdminTests(unittest.TestCase):
         self.admin = self.repo.user(view["id"])
         self.owner = self.user("owner", "editor", "原始创建人")
         self.peer = self.user("peer", "editor")
-        self.viewer = self.user("viewer", "viewer")
+        self.viewer = self.user("viewer", "editor")
         self.target = self.user("target", "editor")
         self.space = self.service.workspace_create(self.owner, {"workspaceName": "Shared"})["id"]
-        for user, collaborate in ((self.peer, False), (self.viewer, True)):
-            self.service.member_change(self.owner, {"workspaceId": self.space, "userId": user["id"], "collaborate": collaborate})
+        for user, member_role in ((self.peer, "editor"), (self.viewer, "viewer")):
+            self.service.member_change(self.owner, {"workspaceId": self.space, "userId": user["id"], "memberRole": member_role})
         self.write(self.owner, "owner.html")
         self.write(self.peer, "peer.html")
 
@@ -100,7 +98,7 @@ class WorkspaceAdminTests(unittest.TestCase):
         self.write(self.peer, "peer.html")
         self.write(self.admin, "owner.html")
         self.assertTrue(self.service.workspace_view(self.admin, self.repo.workspace(self.space))["canManage"])
-        self.service.member_change(self.admin, {"workspaceId": self.space, "userId": self.peer["id"], "collaborate": True})
+        self.service.member_change(self.admin, {"workspaceId": self.space, "userId": self.peer["id"], "memberRole": "manager"})
         self.write(self.peer, "owner.html")
         self.denied("READ_ONLY", self.write, self.viewer, "owner.html")
 
@@ -149,6 +147,7 @@ class WorkspaceAdminTests(unittest.TestCase):
         self.denied("WORKSPACE_NAME_CONFLICT", self.service.workspace_ownership, self.admin, {"id": self.space, "ownerId": self.target["id"]})
         self.assertEqual(self.repo.workspace(self.space)["owner_id"], self.owner["id"])
         self.assertEqual(self.repo.workspace(conflict)["workspace_name"], "Shared")
+        self.service.change_user(self.admin, {"id": self.viewer["id"], "isDisabled": True})
         self.denied("OWNER_INVALID", self.service.workspace_ownership, self.admin, {"id": self.space, "ownerId": self.viewer["id"]})
         self.service.change_user(self.admin, {"id": self.target["id"], "isDisabled": True})
         self.denied("OWNER_INVALID", self.service.workspace_ownership, self.admin, {"id": self.space, "ownerId": self.target["id"]})
@@ -334,31 +333,33 @@ class WorkspaceAdminTests(unittest.TestCase):
             thread.join()
 
 
-class CustodyMigrationTests(unittest.TestCase):
-    def test_legacy_database_migration_is_idempotent_and_preserves_indexes(self):
-        with tempfile.TemporaryDirectory(prefix="baba-migration-test-") as directory:
-            path = Path(directory) / "legacy.sqlite3"
-            stamp, owner, workspace, node = now_ms(), db_id(new_id()), db_id(new_id()), db_id(new_id())
-            old_schema = SCHEMA.replace("owner_id BLOB, creator_id BLOB, creator_nickname TEXT NOT NULL DEFAULT '',\n create_time", "owner_id BLOB NOT NULL, create_time").replace("node_kind TEXT NOT NULL, owner_id BLOB,", "node_kind TEXT NOT NULL, owner_id BLOB NOT NULL,")
-            with closing(sqlite3.connect(path)) as connection, connection:
-                connection.executescript(old_schema)
-                connection.execute("CREATE INDEX idx_workspace_description ON project_workspace(description)")
-                connection.execute("CREATE INDEX idx_node_owner ON workspace_node(owner_id)")
-                connection.execute("INSERT INTO sys_user (id,user_name,nickname,password_hash,user_role,is_disabled,create_time,update_time) VALUES (?,?,?,?,'editor',0,?,?)", (owner, "old-user", "旧库昵称", "not-exposed", stamp, stamp))
-                connection.execute("INSERT INTO project_workspace (id,workspace_name,description,owner_id,create_time,update_time) VALUES (?, 'same', 'keep', ?, ?, ?)", (workspace, owner, stamp, stamp))
-                connection.execute("INSERT INTO workspace_node (id,workspace_id,node_path,node_kind,owner_id,create_time,update_time) VALUES (?,?,'index.html','file',?,?,?)", (node, workspace, owner, stamp, stamp))
+class CustodySchemaTests(unittest.TestCase):
+    def test_current_schema_supports_custody_and_preserves_rows_on_reopen(self):
+        with tempfile.TemporaryDirectory(prefix="baba-custody-schema-") as directory:
+            path = Path(directory) / "current.sqlite3"
             repository = Repository(path)
-            Repository(path)
+            stamp, owner, workspace, node = now_ms(), db_id(new_id()), db_id(new_id()), db_id(new_id())
             with repository.connection() as connection:
-                row = connection.execute("SELECT id,owner_id,creator_id,creator_nickname,create_time FROM project_workspace").fetchone()
-                self.assertEqual(tuple(row), (workspace, owner, owner, "旧库昵称", stamp))
-                indexes = {row["name"] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index'")}
-                self.assertIn("idx_workspace_description", indexes)
-                self.assertIn("idx_node_owner", indexes)
-                connection.execute("UPDATE project_workspace SET owner_id=NULL WHERE id=?", (workspace,))
+                workspace_columns = {row["name"]: row for row in connection.execute("PRAGMA table_info(project_workspace)")}
+                node_columns = {row["name"]: row for row in connection.execute("PRAGMA table_info(workspace_node)")}
+                self.assertFalse(workspace_columns["owner_id"]["notnull"])
+                self.assertFalse(workspace_columns["creator_id"]["notnull"])
+                self.assertFalse(node_columns["owner_id"]["notnull"])
+                connection.execute("INSERT INTO project_workspace (id,workspace_name,description,owner_id,creator_id,creator_nickname,create_time,update_time) VALUES (?, 'same', 'keep', ?, ?, '创建人昵称', ?, ?)", (workspace, owner, owner, stamp, stamp))
+                connection.execute("INSERT INTO workspace_node (id,workspace_id,node_path,node_kind,owner_id,size_bytes,create_time,update_time) VALUES (?,?,'index.html','file',?,12,?,?)", (node, workspace, owner, stamp, stamp))
+            before_workspace = repository.one("SELECT id,workspace_name,description,owner_id,creator_id,creator_nickname,create_time,update_time FROM project_workspace WHERE id=?", (workspace,))
+            before_node = repository.one("SELECT id,owner_id,size_bytes,create_time,update_time FROM workspace_node WHERE id=?", (node,))
+            reopened = Repository(path)
+            self.assertEqual(reopened.workspace(before_workspace["id"]), before_workspace)
+            self.assertEqual(reopened.one("SELECT id,owner_id,size_bytes,create_time,update_time FROM workspace_node WHERE id=?", (node,)), before_node)
+            with reopened.connection() as connection:
+                connection.execute("UPDATE project_workspace SET owner_id=NULL,creator_id=NULL WHERE id=?", (workspace,))
                 connection.execute("UPDATE workspace_node SET owner_id=NULL WHERE id=?", (node,))
-            Repository(path)
-            self.assertEqual(repository.one("SELECT creator_nickname FROM project_workspace")["creator_nickname"], "旧库昵称")
+            reopened = Repository(path)
+            self.assertIsNone(reopened.workspace(before_workspace["id"])["owner_id"])
+            self.assertIsNone(reopened.workspace(before_workspace["id"])["creator_id"])
+            self.assertEqual(reopened.workspace(before_workspace["id"])["creator_nickname"], "创建人昵称")
+            self.assertEqual(reopened.one("SELECT owner_id,size_bytes FROM workspace_node WHERE id=?", (node,)), {"owner_id": None, "size_bytes": 12})
 
 
 if __name__ == "__main__":

@@ -31,29 +31,26 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.database_path, Path(directory).resolve() / "data" / "baba-share.sqlite3")
             self.assertTrue((config.root / "filedb").is_dir())
 
-    def test_old_database_blocks_startup_without_new_empty_database(self):
+    def test_config_uses_only_current_database_without_inspecting_other_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "data").mkdir()
-            legacy = root / "data" / "product-share.sqlite3"
-            legacy.write_bytes(b"existing-database")
-            with self.assertRaisesRegex(ValueError, "发现旧数据库.*先备份.*拒绝启动"):
-                Config(root)
-            self.assertEqual(legacy.read_bytes(), b"existing-database")
-            self.assertFalse((root / "data" / "baba-share.sqlite3").exists())
-            self.assertFalse((root / "filedb").exists())
+            unrelated = root / "data" / "unrelated.sqlite3"
+            unrelated.write_bytes(b"unrelated-file")
+            config = Config(root)
+            self.assertEqual(config.database_path, root.resolve() / "data" / "baba-share.sqlite3")
+            self.assertEqual(unrelated.read_bytes(), b"unrelated-file")
+            self.assertFalse(config.database_path.exists())
+            self.assertTrue((root / "filedb").is_dir())
 
-    def test_old_and_current_databases_block_startup_without_modification(self):
+    def test_config_selects_current_database_without_modification(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "data").mkdir()
-            legacy = root / "data" / "product-share.sqlite3"
             current = root / "data" / "baba-share.sqlite3"
-            legacy.write_bytes(b"old-database")
             current.write_bytes(b"current-database")
-            with self.assertRaisesRegex(ValueError, "发现旧数据库.*人工确认"):
-                Config(root)
-            self.assertEqual(legacy.read_bytes(), b"old-database")
+            config = Config(root)
+            self.assertEqual(config.database_path, current.resolve())
             self.assertEqual(current.read_bytes(), b"current-database")
 
     def test_origin_validation_and_normalization(self):
@@ -175,8 +172,8 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(status, 200, result)
         return result["id"]
 
-    def invite(self, workspace_id, user, collaborate=False):
-        status, result, _ = self.request("POST", "/member", {"workspaceId": workspace_id, "userId": user["id"], "collaborate": collaborate}, self.admin_cookie)
+    def invite(self, workspace_id, user, member_role="editor"):
+        status, result, _ = self.request("POST", "/member", {"workspaceId": workspace_id, "userId": user["id"], "memberRole": member_role}, self.admin_cookie)
         self.assertEqual(status, 200, result)
 
     def write(self, workspace_id, path, content="<h1>页面</h1>", cookie=None):
@@ -201,7 +198,7 @@ class BackendTests(unittest.TestCase):
 
     def test_public_registration_always_editor_with_workspace_but_no_admin_settings(self):
         from backend.service import Service
-        existing, _ = self.add_user("existing-viewer", "viewer")
+        existing, _ = self.add_user("existing-editor", "editor")
         before = self.app.service.repo.user(existing["id"])
         self.assertEqual(self.admin["role"], "admin")
         self.assertEqual(self.request("PATCH", "/setting", {"registrationEnabled": True}, self.admin_cookie)[0], 200)
@@ -227,15 +224,15 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(Service(self.config).repo.user(existing["id"]), before)
         self.assertTrue(self.app.service.install_detail()["registrationEnabled"])
 
-    def test_admin_created_accounts_keep_explicit_roles_and_existing_default(self):
-        for role in (None, "admin", "editor", "viewer"):
+    def test_admin_created_accounts_keep_explicit_roles_and_editor_default(self):
+        for role in (None, "admin", "editor"):
             with self.subTest(role=role):
                 body = {"userName": "created-" + (role or "default"), "password": "password-123"}
                 if role is not None:
                     body["role"] = role
                 status, user, _ = self.request("POST", "/user", body, self.admin_cookie)
-                self.assertEqual((status, user["role"]), (200, role or "viewer"))
-                self.assertEqual(self.app.service.repo.user(user["id"])["user_role"], role or "viewer")
+                self.assertEqual((status, user["role"]), (200, role or "editor"))
+                self.assertEqual(self.app.service.repo.user(user["id"])["user_role"], role or "editor")
 
     def test_password_hash_and_setup_length_boundaries(self):
         from backend.service import BizError, Service, password_hash, password_valid
@@ -381,22 +378,22 @@ vm.runInContext(source.slice(source.indexOf('  async function createUser()'),sou
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_user_edit_all_business_fields_and_readonly_audit(self):
-        user, cookie = self.add_user("edit-business")
+        user, cookie = self.add_user("edit-business", "admin")
         before = self.app.service.repo.user(user["id"])
         status, updated, _ = self.request("PATCH", "/user", {
             "id": user["id"], "userName": "new+account@example.com", "nickname": "新名称",
-            "role": "viewer", "isDisabled": False, "password": "",
+            "role": "editor", "isDisabled": False, "password": "",
         }, self.admin_cookie)
         self.assertEqual(status, 200, updated)
-        self.assertEqual(set(updated), {"id", "userName", "nickname", "role", "isDisabled", "email", "emailVerified", "createTime", "updateTime"})
+        self.assertEqual(set(updated), {"id", "userName", "nickname", "role", "isDisabled", "email", "emailVerified", "createTime", "updateTime", "quota"})
         self.assertEqual((updated["userName"], updated["nickname"], updated["role"], updated["isDisabled"]),
-                         ("new+account@example.com", "新名称", "viewer", False))
+                         ("new+account@example.com", "新名称", "editor", False))
         after = self.app.service.repo.user(user["id"])
         self.assertEqual(after["password_hash"], before["password_hash"])
         self.assertEqual(updated["createTime"], before["create_time"])
         self.assertIsInstance(updated["updateTime"], int)
         self.assertGreaterEqual(updated["updateTime"], before["update_time"])
-        self.assertEqual(self.request("GET", "/session/detail", cookie=cookie)[1]["role"], "viewer")
+        self.assertEqual(self.request("GET", "/session/detail", cookie=cookie)[1]["role"], "editor")
         self.assertEqual(self.request("POST", "/visitor/session", {"userName": "edit-business", "password": "password-123"})[0], 401)
         self.assertEqual(self.request("POST", "/visitor/session", {"userName": updated["userName"], "password": "password-123"})[0], 200)
         for key, value in (("createTime", 0), ("updateTime", 0), ("password_hash", "secret"), ("user_role", "admin")):
@@ -447,13 +444,13 @@ vm.runInContext(source.slice(source.indexOf('  async function createUser()'),sou
         self.assertEqual(self.request("POST", "/visitor/session", {"userName": "admin", "password": "new-admin-pass"})[0], 200)
 
     def test_user_last_admin_and_disabled_admin_edits(self):
-        for patch, expected in (({"role": "viewer"}, "LAST_ADMIN"), ({"isDisabled": True}, "SELF_DISABLE_FORBIDDEN")):
+        for patch, expected in (({"role": "editor"}, "LAST_ADMIN"), ({"isDisabled": True}, "SELF_DISABLE_FORBIDDEN")):
             status, error, _ = self.request("PATCH", "/user", {"id": self.admin["id"], **patch}, self.admin_cookie)
             self.assertEqual((status, error["status"]), (409, expected))
         other, _ = self.add_user("other-admin", "admin")
         self.assertEqual(self.request("PATCH", "/user", {"id": other["id"], "isDisabled": True}, self.admin_cookie)[0], 200)
         self.assertEqual(self.request("PATCH", "/user", {"id": other["id"], "nickname": "禁用管理员资料"}, self.admin_cookie)[0], 200)
-        self.assertEqual(self.request("PATCH", "/user", {"id": other["id"], "role": "viewer"}, self.admin_cookie)[0], 200)
+        self.assertEqual(self.request("PATCH", "/user", {"id": other["id"], "role": "editor"}, self.admin_cookie)[0], 200)
         status, error, _ = self.request("PATCH", "/user", {"id": self.admin["id"], "isDisabled": True}, self.admin_cookie)
         self.assertEqual((status, error["status"]), (409, "SELF_DISABLE_FORBIDDEN"))
 
@@ -464,10 +461,10 @@ vm.runInContext(source.slice(source.indexOf('  async function createUser()'),sou
         self.assertEqual((status, error["status"]), (409, "SELF_DISABLE_FORBIDDEN"))
         self.assertEqual(self.app.service.repo.user(other["id"]), before)
         self.assertEqual(self.request("GET", "/session/detail", cookie=cookie)[0], 200)
-        status, updated, _ = self.request("PATCH", "/user", {"id": other["id"], "role": "viewer"}, cookie)
-        self.assertEqual((status, updated["role"]), (200, "viewer"))
+        status, updated, _ = self.request("PATCH", "/user", {"id": other["id"], "role": "editor"}, cookie)
+        self.assertEqual((status, updated["role"]), (200, "editor"))
         self.assertEqual(self.request("GET", "/user/list", cookie=cookie)[0], 403)
-        self.assertEqual(self.request("GET", "/session/detail", cookie=cookie)[1]["role"], "viewer")
+        self.assertEqual(self.request("GET", "/session/detail", cookie=cookie)[1]["role"], "editor")
         self.assertEqual(self.app.service.repo.user(other["id"])["id"], before["id"])
         self.assertEqual(self.app.service.repo.user(self.admin["id"])["user_role"], "admin")
 
@@ -475,7 +472,7 @@ vm.runInContext(source.slice(source.indexOf('  async function createUser()'),sou
         status, result, _ = self.request("POST", "/visitor/session", {"userName": "admin", "password": "bad"})
         self.assertEqual(status, 401)
         self.assertEqual(set(result), {"code", "msg", "status"})
-        status, _, _ = self.request("PATCH", "/user", {"id": self.admin["id"], "role": "viewer"}, self.admin_cookie)
+        status, _, _ = self.request("PATCH", "/user", {"id": self.admin["id"], "role": "editor"}, self.admin_cookie)
         self.assertEqual(status, 409)
         user, cookie = self.add_user("editor")
         self.request("PATCH", "/user", {"id": user["id"], "isDisabled": True}, self.admin_cookie)
@@ -572,12 +569,19 @@ vm.runInContext(source.slice(source.indexOf('  async function createUser()'),sou
 
     def test_workspace_roles_membership_and_admin_authority(self):
         editor, editor_cookie = self.add_user("editor")
-        viewer, viewer_cookie = self.add_user("viewer", "viewer")
+        viewer, viewer_cookie = self.add_user("viewer", "editor")
         workspace_id = self.workspace(editor_cookie)
-        self.assertEqual(self.request("POST", "/workspace", {"workspaceName": "no"}, viewer_cookie)[0], 403)
+        own_workspace = self.workspace(viewer_cookie, "viewer-owned")
+        self.assertNotEqual(own_workspace, workspace_id)
         self.assertEqual(self.request("GET", "/node/list", cookie=viewer_cookie, query={"workspaceId": workspace_id})[0], 403)
-        self.invite(workspace_id, viewer, True)
+        self.invite(workspace_id, viewer, "viewer")
         self.assertEqual(self.request("GET", "/node/list", cookie=viewer_cookie, query={"workspaceId": workspace_id})[0], 200)
+        visible = self.request("GET", "/workspace/list", cookie=viewer_cookie)[1]
+        shared = next(item for item in visible if item["id"] == workspace_id)
+        self.assertEqual((shared["memberRole"], shared["canWrite"], shared["canManage"]), ("viewer", False, False))
+        self.assertNotIn("collaborate", shared)
+        owned = next(item for item in visible if item["id"] == own_workspace)
+        self.assertEqual((owned["memberRole"], owned["canWrite"], owned["canManage"]), ("manager", True, True))
         self.assertEqual(self.write(workspace_id, "no.html", cookie=viewer_cookie)[0], 403)
         self.assertEqual(self.request("POST", "/share", {"workspaceId": workspace_id}, viewer_cookie)[0], 403)
         self.assertEqual(self.request("GET", "/user/list", cookie=editor_cookie)[0], 403)
@@ -596,7 +600,7 @@ vm.runInContext(source.slice(source.indexOf('  async function createUser()'),sou
         status, _, _ = self.request("PATCH", "/folder", {"workspaceId": workspace_id, "path": "mixed", "newPath": "moved"}, cookie)
         self.assertEqual(status, 403)
         self.assertEqual(self.request("DELETE", "/file", cookie=cookie, query={"workspaceId": workspace_id, "path": "mixed/mine.html"})[0], 200)
-        self.invite(workspace_id, editor, True)
+        self.invite(workspace_id, editor, "manager")
         self.assertEqual(self.write(workspace_id, "mixed/admin.html", cookie=cookie)[0], 200)
         self.assertEqual(self.request("PATCH", "/folder", {"workspaceId": workspace_id, "path": "mixed", "newPath": "moved"}, cookie)[0], 200)
         self.assertTrue((self.config.root / "filedb" / workspace_id / "moved/admin.html").is_file())
@@ -688,10 +692,10 @@ vm.runInContext(source.slice(source.indexOf('  async function createUser()'),sou
 
     def test_upload_all_policies_respect_foreign_ownership_and_viewer(self):
         editor, cookie = self.add_user("upload-editor")
-        viewer, view_cookie = self.add_user("upload-viewer", "viewer")
+        viewer, view_cookie = self.add_user("upload-viewer", "editor")
         workspace = self.workspace()
         self.invite(workspace, editor)
-        self.invite(workspace, viewer, True)
+        self.invite(workspace, viewer, "viewer")
         self.write(workspace, "owned.txt", "owner")
         for policy in ("ask", "overwrite", "rename"):
             payload = {"workspaceId": workspace, "conflictPolicy": policy, "requestId": "permission-test-001", "files": [
@@ -700,7 +704,7 @@ vm.runInContext(source.slice(source.indexOf('  async function createUser()'),sou
             self.assertEqual(self.request("POST", "/file/upload", payload, cookie)[1]["status"], "FOREIGN_CONTENT")
             self.assertEqual(self.request("POST", "/file/upload", payload, view_cookie)[1]["status"], "READ_ONLY")
             self.assertFalse((self.config.root / "filedb" / workspace / "new").exists())
-        self.invite(workspace, editor, True)
+        self.invite(workspace, editor, "manager")
         self.assertEqual(self.request("POST", "/file/upload", payload, cookie)[1]["count"], 2)
 
     def test_upload_type_invalid_and_batch_case_conflicts_never_write(self):
@@ -893,7 +897,7 @@ vm.runInContext(source.slice(source.indexOf('  async function createUser()'),sou
         from backend.service import BizError
         workspace = self.workspace()
         editor, cookie = self.add_user("replay-editor")
-        self.invite(workspace, editor, True)
+        self.invite(workspace, editor, "manager")
         self.write(workspace, "one.txt", "original")
         services = [Application(self.config).service for _ in range(4)]
         user = services[0].repo.user(editor["id"])
@@ -908,12 +912,12 @@ vm.runInContext(source.slice(source.indexOf('  async function createUser()'),sou
         admin_result = services[0].upload(self.app.service.repo.user(self.admin["id"]), payload)
         self.assertNotEqual(results[0]["files"], admin_result["files"])
         self.assertEqual(len(list(disk.glob("one_*.txt"))), 2)
-        self.invite(workspace, editor, False)
+        self.invite(workspace, editor, "editor")
         with self.assertRaises(BizError) as raised:
             services[0].upload(user, payload)
         self.assertEqual(raised.exception.status, "FOREIGN_CONTENT")
-        self.invite(workspace, editor, True)
-        self.app.service.change_user(self.app.service.repo.user(self.admin["id"]), {"id": editor["id"], "role": "viewer"})
+        self.invite(workspace, editor, "manager")
+        self.invite(workspace, editor, "viewer")
         with self.assertRaises(BizError) as raised:
             services[0].upload(user, payload)
         self.assertEqual(raised.exception.status, "READ_ONLY")
@@ -942,14 +946,14 @@ const context={console,URL,AbortController,crypto:require('crypto').webcrypto,Da
  document:{documentElement:{lang:'zh-CN',dir:'ltr',dataset:{mode:'dark'}},querySelectorAll:()=>[],createTextNode:t=>t,addEventListener(){}},
  FileReader:class{readAsDataURL(file){if(readHook){const hook=readHook;readHook=null;hook();}this.result='data:;base64,'+Buffer.from(file.content).toString('base64');this.onload();}},
  LocalPager:()=>({pageIndex:1,pageSize:20,reset(){},accept:()=>true,busy(){}}),addEventListener(){},
- UI:{$,el,button,icon:()=>el('svg'),empty:()=>el('div'),date:String,toast:t=>notices.push(t),formDialog(){},errorText:e=>e.status||String(e),page:()=>({ready:Promise.resolve()}),
+ UI:{$,el,button,quotaSummary:()=>el('div'),icon:()=>el('svg'),empty:()=>el('div'),date:String,toast:t=>notices.push(t),formDialog(){},errorText:e=>e.status||String(e),page:()=>({ready:Promise.resolve()}),
  dialog:(title,build)=>{let resolve;const result=new Promise(r=>resolve=r),node=el('dialog');const close=value=>resolve(value);build(node,close);dialogs.push(node);if(choice)flatten(node).find(x=>x.textContent===choice).fn();else close(null);return{result,close};}},
- API:async(name,options={})=>{if(name==='me')return{id:'admin',role:'admin'};if(name==='workspaces')return[];if(name==='members')return[];if(name==='nodes')return{entries:[],pageIndex:1,pageSize:20,totalCount:0,totalPage:0};if(name!=='upload')throw Error(name);uploads.push(JSON.parse(JSON.stringify(options.body)));const response=await fetch(input.origin+'/api/baba-share/core/v1/file/upload',{method:'POST',headers:{Cookie:input.cookie,Origin:input.origin,'Content-Type':'application/json'},body:JSON.stringify(options.body)});const value=await response.json();if(!response.ok)throw value;return value;}};
+ API:async(name,options={})=>{if(name==='me')return{id:'admin',role:'admin'};if(name==='workspaces')return[];if(name==='members')return[];if(name==='quota')return{};if(name==='nodes')return{entries:[],pageIndex:1,pageSize:20,totalCount:0,totalPage:0};if(name!=='upload')throw Error(name);uploads.push(JSON.parse(JSON.stringify(options.body)));const response=await fetch(input.origin+'/api/baba-share/core/v1/file/upload',{method:'POST',headers:{Cookie:input.cookie,Origin:input.origin,'Content-Type':'application/json'},body:JSON.stringify(options.body)});const value=await response.json();if(!response.ok)throw value;return value;}};
 context.window=context;vm.createContext(context);
 vm.runInContext(fs.readFileSync(input.assets+'/i18n.js','utf8'),context);
 let source=fs.readFileSync(input.assets+'/workspace.js','utf8');
 source=source.replace('  await page.ready;', '  window.uploadTest={uploadFiles,selectWorkspace,setWorkspace(value){workspace=value;path="site";},setWorkspaces(value){workspaces=value;},setAlways(value){alwaysOverwrite=value;},getAlways(){return alwaysOverwrite;}};\n  await page.ready;');
-(async()=>{await vm.runInContext(source,context);context.uploadTest.setWorkspace({id:input.workspace,canWrite:true});
+(async()=>{await vm.runInContext(source,context);context.uploadTest.setWorkspace({id:input.workspace,canWrite:true,canManage:true,memberRole:'manager'});
  const files=[{name:'index.html',content:'new'},{name:'script.js',content:'script'}];
  for(const locale of ['zh-CN','en-US','ar-SA']){context.I18n.apply({locale,theme:'dark'});assert.notEqual(context.I18n.t('uploadConflictTitle'),context.I18n.t('unknownError'));assert(context.I18n.t('mcpUploadConflict').includes('requiresConfirmation'));}
  $('#upload-input').value='retained-selection';$('#directory-input').value='retained-directory';
@@ -958,9 +962,9 @@ source=source.replace('  await page.ready;', '  window.uploadTest={uploadFiles,s
  choice='uploadOverwrite';await context.uploadTest.uploadFiles(files);assert.equal(uploads.length,5);assert.equal(uploads[4].conflictPolicy,'overwrite');
  context.uploadTest.setAlways(true);await context.uploadTest.uploadFiles(files);assert.equal(uploads.length,6);assert.equal(uploads[5].conflictPolicy,'overwrite');assert.equal($('#upload-input').value,'');
  context.uploadTest.setAlways(false);choice=null;readHook=()=>context.uploadTest.setAlways(true);await context.uploadTest.uploadFiles(files);assert.equal(uploads.length,7);assert.equal(uploads[6].conflictPolicy,'ask');
- context.uploadTest.setWorkspaces([{id:input.workspace,canWrite:true,workspaceName:'first'},{id:'other-space',canWrite:true,workspaceName:'other'}]);
+ context.uploadTest.setWorkspaces([{id:input.workspace,canWrite:true,memberRole:'manager',workspaceName:'first'},{id:'other-space',canWrite:true,memberRole:'manager',workspaceName:'other'}]);
  await context.uploadTest.selectWorkspace('other-space');assert.equal(context.uploadTest.getAlways(),false);assert.equal(flatten($('#file-actions')).find(n=>n.attrs.id==='upload-always-overwrite').checked,false);
- context.uploadTest.setWorkspace({id:input.workspace,canWrite:true});context.uploadTest.setAlways(true);readHook=()=>{context.uploadTest.selectWorkspace('other-space');};await context.uploadTest.uploadFiles(files);assert.equal(uploads.length,8);assert.equal(uploads[7].workspaceId,input.workspace);assert.equal(uploads[7].path,'site');assert.equal(uploads[7].conflictPolicy,'overwrite');
+ context.uploadTest.setWorkspace({id:input.workspace,canWrite:true,canManage:true,memberRole:'manager'});context.uploadTest.setAlways(true);readHook=()=>{context.uploadTest.selectWorkspace('other-space');};await context.uploadTest.uploadFiles(files);assert.equal(uploads.length,8);assert.equal(uploads[7].workspaceId,input.workspace);assert.equal(uploads[7].path,'site');assert.equal(uploads[7].conflictPolicy,'overwrite');
  process.stdout.write('取消零重试、保留两份和覆盖策略及三语实际执行通过');
 })().catch(e=>{console.error(e);process.exit(1);});
 '''
@@ -999,13 +1003,13 @@ document={documentElement:{lang:'zh-CN',dir:'ltr',clientWidth:360,dataset:{mode:
 const context={console,URL,AbortController,crypto:require('crypto').webcrypto,Date,document,innerHeight:220,getSelection:()=>({toString:()=>selection}),
  location:new URL('http://localhost/baba-share/workspace.html?search=report&sort=size&order=desc'),history:{replaceState(_,title,url){context.location=new URL(url);}},events:{},addEventListener(k,f){this.events[k]=f;},
  LocalPager:()=>({pageIndex:1,pageSize:20,reset(){},accept:()=>true,busy(){}}),
- UI:{$,el,button,copyButton:button,icon:()=>el('svg'),empty:()=>el('div'),date:String,size:String,toast:t=>notices.push(t),errorText:e=>e.status||String(e),confirm:async()=>confirm,page:()=>({ready:Promise.resolve(),request:async()=>true}),copy:async()=>{},invitationUrl:(route,token)=>{assert.equal(route,'invite');assert.match(token,/^[A-Za-z0-9_-]{43}$/);return context.location.origin+'/baba-share/invite.html#invite='+token;},
+ UI:{$,el,button,copyButton:button,quotaSummary:()=>el('div'),icon:()=>el('svg'),empty:()=>el('div'),date:String,size:String,toast:t=>notices.push(t),errorText:e=>e.status||String(e),confirm:async()=>confirm,page:()=>({ready:Promise.resolve(),request:async()=>true}),copy:async()=>{},invitationUrl:(route,token)=>{assert.equal(route,'invite');assert.match(token,/^[A-Za-z0-9_-]{43}$/);return context.location.origin+'/baba-share/invite.html#invite='+token;},
  formDialog:async(title,fields,submit)=>{forms.push(fields);return cancelForm?null:submit(formValues);},
  dialog:(title,build)=>{let resolve;const result=new Promise(r=>resolve=r),node=el('dialog');const close=value=>resolve(value);build(node,close);dialogs.push({title,node});if(selected){const s=flatten(node).find(n=>n.tag==='select');if(s)s.value=selected;}const action=flatten(node).find(n=>n.textContent===choice);if(action)action.fn();else close(null);return{result,close};}},
- API:async(name,options={})=>{calls.push({name,...options});if(name==='me')return{id:'admin',role:'admin'};if(name==='workspaces'||name==='members')return[];if(name==='nodes')return{entries:[]};if(name==='invitations')return[{id:'invite-row',isActive:true,collaborate:false,createTime:1,expireTime:2}];if(name==='invitation'&&options.method==='POST')return{inviteUrl:'https://stale.example/baba-share/invite.html#invite='+'a'.repeat(43),expireTime:2};if(name==='shares')return shares;if(name==='share')return{id:'new',shareUrl:'new-link',expireTime:null};if(name==='workspace'&&options.method==='PATCH')return{...options.body,canManage:true,canWrite:true};return{};}};
+ API:async(name,options={})=>{calls.push({name,...options});if(name==='me')return{id:'admin',role:'admin'};if(name==='workspaces'||name==='members')return[];if(name==='nodes')return{entries:[]};if(name==='invitations')return[{id:'invite-row',isActive:true,memberRole:'editor',createTime:1,expireTime:2}];if(name==='invitation'&&options.method==='POST')return{inviteUrl:'https://stale.example/baba-share/invite.html#invite='+'a'.repeat(43),expireTime:2};if(name==='shares')return shares;if(name==='share')return{id:'new',shareUrl:'new-link',expireTime:null};if(name==='workspace'&&options.method==='PATCH')return{...options.body,canManage:true,canWrite:true,memberRole:'manager'};return{};}};
 context.window=context;vm.createContext(context);vm.runInContext(fs.readFileSync(process.argv[1]+'/i18n.js','utf8'),context);
 let source=fs.readFileSync(process.argv[1]+'/workspace.js','utf8').replace('  await page.ready;',`  window.test={inviteMember,manageInvitations,shareFolder,editWorkspace,deleteWorkspace,renderFiles,renderChrome,rowActions,openRowMenu,closeRowMenu,set(w,p='',e=[]){workspace=w;path=p;entries=e;workspaces=w?[w]:[];},pick(rows){workspace=null;path='';workspaces=rows;renderChrome();},menu(){return activeMenu;}};\n  await page.ready;`);
-(async()=>{await vm.runInContext(source,context);const t=context.test,w={id:'space',workspaceName:'Workspace',description:'old',canManage:true,canWrite:true};
+(async()=>{await vm.runInContext(source,context);const t=context.test,w={id:'space',workspaceName:'Workspace',description:'old',canManage:true,canWrite:true,memberRole:'manager'};
  for(const locale of ['zh-CN','en-US','ar-SA']){context.I18n.apply({locale,theme:'dark'});assert.notEqual(context.I18n.t('editWorkspace'),context.I18n.t('unknownError'));assert.notEqual(context.I18n.t('existingSharesHint'),context.I18n.t('unknownError'));}
  for(const locale of ['zh-CN','en-US','ar-SA'])for(const theme of ['light','dark']){
   context.I18n.apply({locale,theme});t.pick([w]);const card=$('#workspace-cards').children[0],link=card.querySelectorAll('a')[0],footer=card.children.at(-1);assert.equal(card.attrs.class,'card workspace-card');assert(!card.attrs.role&&!card.attrs.tabindex);assert.equal(link.textContent,'Workspace');assert.equal(new URL(link.attrs.href).searchParams.get('workspaceId'),'space');assert.equal(new URL(link.attrs.href).searchParams.get('path'),'');assert.equal(new URL(link.attrs.href).searchParams.get('search'),'report');assert.equal(footer.tag,'footer');assert.deepEqual(footer.children.map(n=>n.textContent),['editWorkspace','deleteWorkspace']);assert(!card.querySelectorAll('button').some(n=>n.textContent==='openWorkspace'));
@@ -1015,17 +1019,17 @@ let source=fs.readFileSync(process.argv[1]+'/workspace.js','utf8').replace('  aw
   cancelForm=true;count=calls.length;await footer.children[0].click();assert.equal(calls.length,count);assert.equal($('#file-browser').hidden,true);assert.equal($('#workspace-cards').children[0],card);cancelForm=false;
   formValues={workspaceName:'Edited',description:'new'};count=calls.length;await footer.children[0].click();assert.equal($('#file-browser').hidden,true);assert.equal(calls.length,count+1);assert.equal(calls.at(-1).method,'PATCH');assert.equal(calls.at(-1).body.id,'space');
   t.pick([w]);confirm=false;count=calls.length;await $('#workspace-cards').children[0].children.at(-1).children[1].click();assert.equal(calls.length,count);assert.equal($('#file-browser').hidden,true);confirm=true;await $('#workspace-cards').children[0].children.at(-1).children[1].click();assert.equal(calls.length,count+1);assert.equal(calls.at(-1).method,'DELETE');assert.equal($('#workspace-cards').children.length,1);assert.equal($('#file-browser').hidden,true);
-  for(const target of ['article','description','date','link']){t.pick([w]);const current=$('#workspace-cards').children[0],node=target==='article'?current:target==='description'?current.children[1]:target==='date'?current.children[2]:current.querySelectorAll('a')[0];count=calls.length;assert.equal((await node.click()).defaultPrevented,true);assert.equal($('#file-browser').hidden,false);assert.equal(context.location.searchParams.get('workspaceId'),'space');assert.deepEqual(calls.slice(count).map(c=>c.name).sort(),['members','nodes']);}
-  for(const permissions of [{canManage:false,canWrite:false},{canManage:false,canWrite:true},{canManage:true,canWrite:false}]){t.pick([{...w,...permissions}]);const current=$('#workspace-cards').children[0];assert.equal(current.querySelectorAll('button').length,0);assert.equal(current.querySelectorAll('footer').length,0);await current.querySelectorAll('a')[0].click();assert.equal($('#file-browser').hidden,false);assert(!flatten($('#workspace-head-actions')).some(n=>['editWorkspace','deleteWorkspace'].includes(n.textContent)));}
+  for(const target of ['article','description','date','link']){t.pick([w]);const current=$('#workspace-cards').children[0],node=target==='article'?current:target==='description'?current.children[1]:target==='date'?current.children[2]:current.querySelectorAll('a')[0];count=calls.length;assert.equal((await node.click()).defaultPrevented,true);assert.equal($('#file-browser').hidden,false);assert.equal(context.location.searchParams.get('workspaceId'),'space');assert.deepEqual(calls.slice(count).map(c=>c.name).sort(),['members','nodes','quota']);}
+  for(const permissions of [{canManage:false,canWrite:false,memberRole:'viewer'},{canManage:false,canWrite:true,memberRole:'editor'},{canManage:true,canWrite:true,memberRole:'manager'}]){t.pick([{...w,...permissions}]);const current=$('#workspace-cards').children[0];assert.equal(current.querySelectorAll('button').length,permissions.canManage?2:0);assert.equal(current.querySelectorAll('footer').length,permissions.canManage?1:0);await current.querySelectorAll('a')[0].click();assert.equal($('#file-browser').hidden,false);assert.equal(flatten($('#workspace-head-actions')).filter(n=>['editWorkspace','deleteWorkspace'].includes(n.textContent)).length,permissions.canManage?2:0);}
  }
  const css=fs.readFileSync(process.argv[1]+'/components.css','utf8'),cardRule=css.match(/\.card\{([^}]+)\}/)[1],footerRule=css.match(/\.card>footer\{([^}]+)\}/)[1],workspaceFooter=css.match(/\.card\.workspace-card>footer\{([^}]+)\}/)[1];for(const value of ['display:flex','flex-direction:column','min-inline-size:0','overflow-wrap:anywhere'])assert(cardRule.includes(value));for(const value of ['margin-block-start:auto','flex-shrink:0','flex-wrap:wrap'])assert(footerRule.includes(value));assert(footerRule.includes('justify-content:flex-end'));assert(footerRule.includes('align-items:flex-end'));assert(!/justify-content|align-items/.test(workspaceFooter));assert(css.includes('.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr));gap:var(--space-3);align-items:stretch}'));assert(css.includes('.workspace-card-link:focus-visible{outline:2px solid var(--color-border-focus)'));assert(!/position:(absolute|fixed)/.test(workspaceFooter));
- t.set(w);formValues={collaborate:'false',expireHours:'168'};await t.inviteMember();let invitation=calls.find(c=>c.name==='invitation');assert.equal(invitation.method,'POST');assert.equal(invitation.body.collaborate,false);assert.equal(invitation.body.expireHours,168);assert.equal(invitation.body.workspaceId,'space');assert.equal(typeof invitation.body.requestId,'string');assert(!forms.at(-1).some(f=>f.name==='userName'));assert(flatten(dialogs.at(-1).node).some(n=>n.value==='http://localhost/baba-share/invite.html#invite='+'a'.repeat(43)));
+ t.set(w);formValues={memberRole:'editor',expireHours:'168'};await t.inviteMember();let invitation=calls.find(c=>c.name==='invitation');assert.equal(invitation.method,'POST');assert.equal(invitation.body.memberRole,'editor');assert(!('collaborate' in invitation.body));assert.equal(invitation.body.expireHours,168);assert.equal(invitation.body.workspaceId,'space');assert.equal(typeof invitation.body.requestId,'string');assert(!forms.at(-1).some(f=>f.name==='userName'));assert(flatten(dialogs.at(-1).node).some(n=>n.value==='http://localhost/baba-share/invite.html#invite='+'a'.repeat(43)));
  await t.manageInvitations();assert(calls.some(c=>c.name==='invitations'&&c.query.workspaceId==='space'));assert.equal(dialogs.at(-1).title,context.I18n.t('inviteManage'));const inviteGrid=flatten(dialogs.at(-1).node).find(n=>n.attrs.class==='cards invitation-cards');assert(inviteGrid);const inviteCard=inviteGrid.children[0];assert.equal(inviteCard.attrs.class,'card invitation-card');assert.equal(inviteCard.children.at(-1).tag,'footer');assert.equal(inviteCard.children.at(-1).children.length,1);let removeInvite=flatten(dialogs.at(-1).node).find(n=>n.textContent==='delete');confirm=false;let beforeDelete=calls.length;await removeInvite.fn();assert.equal(calls.length,beforeDelete);confirm=true;await removeInvite.fn();assert(calls.some(c=>c.name==='invitation'&&c.method==='DELETE'&&c.query.id==='invite-row'));dialogs=[];
- t.set(w,'folder');shares=[{id:'valid',workspaceId:'space',path:'folder',shareUrl:'existing-link',expireTime:null,createTime:1},{id:'valid2',workspaceId:'space',path:'folder',shareUrl:'second-link',expireTime:Date.now()+60000,createTime:2},{id:'expired',workspaceId:'space',path:'folder',expireTime:Date.now()-1},{id:'revoked',workspaceId:'space',path:'folder',revokedTime:1},{id:'other',workspaceId:'space',path:'folder-child'},{id:'other-space',workspaceId:'else',path:'folder'}];
+ t.set(w,'folder');shares=[{id:'valid',workspaceId:'space',path:'folder',shareUrl:'existing-link',expireTime:null,createTime:1},{id:'valid2',workspaceId:'space',path:'folder',shareUrl:'second-link',expireTime:Date.now()+60000,createTime:2},{id:'expired',workspaceId:'space',path:'folder',expireTime:Date.now()-1},{id:'expired2',workspaceId:'space',path:'folder',expireTime:Date.now()-1000},{id:'other',workspaceId:'space',path:'folder-child'},{id:'other-space',workspaceId:'else',path:'folder'}];
  choice='useExistingShare';selected='valid2';await t.shareFolder();assert.equal(calls.filter(c=>c.name==='share').length,0);assert.equal(flatten(dialogs[0].node).find(n=>n.tag==='select').children.length,2);assert(flatten(dialogs[1].node).some(n=>n.value==='second-link'));
  choice='cancel';await t.shareFolder();assert.equal(calls.filter(c=>c.name==='share').length,0);
  choice='newShare';formValues={expireHours:'168'};await t.shareFolder();let created=calls.filter(c=>c.name==='share');assert.equal(created.length,1);assert.equal(created[0].body.path,'folder');assert.equal(created[0].body.createNew,true);
- shares=shares.filter(s=>s.id==='expired'||s.id==='revoked');await t.shareFolder();assert.equal(calls.filter(c=>c.name==='share').length,2);
+ shares=shares.filter(s=>s.id==='expired'||s.id==='expired2');await t.shareFolder();assert.equal(calls.filter(c=>c.name==='share').length,2);
  t.set(w);formValues={workspaceName:'Renamed',description:'new'};await t.editWorkspace(w);assert(calls.some(c=>c.name==='workspace'&&c.method==='PATCH'&&c.body.id==='space'));assert.equal($('#workspace-title').textContent,'Renamed');
  confirm=false;const count=calls.length;await t.deleteWorkspace(w);assert.equal(calls.length,count);confirm=true;await t.deleteWorkspace(w);assert(calls.some(c=>c.name==='workspace'&&c.method==='DELETE'&&c.query.id==='space'));assert.equal($('#file-browser').hidden,true);
  const folder={name:'folder',path:'folder',kind:'folder',canWrite:true},file={name:'a.txt',path:'a.txt',kind:'file',canWrite:true},html={name:'index.html',path:'index.html',kind:'file',canWrite:true};t.set(w,'',[folder,file,html]);t.renderFiles();

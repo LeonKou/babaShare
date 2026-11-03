@@ -9,7 +9,7 @@
     requestId = 0;
   const pager = LocalPager($("#user-pagination"), render);
   function roles() {
-    return ["viewer", "editor", "admin"].map((value) => ({
+    return ["editor", "admin"].map((value) => ({
       value,
       label: I18n.t(value),
     }));
@@ -50,6 +50,7 @@
             class: "small muted num",
             text: I18n.t("created") + ": " + UI.date(user.createTime),
           }),
+          UI.quotaSummary(user.quota),
           user.id === me?.id
             ? el("small", { class: "muted", text: I18n.t("SELF_DISABLE_FORBIDDEN"), title: I18n.t("SELF_DELETE_FORBIDDEN") })
             : null,
@@ -106,7 +107,7 @@
           validator: (v) =>
             v.length < 6 || v.length > 256 ? I18n.t("passwordError") : "",
         },
-        { key: "role", name: "role", value: "viewer", options: roles() },
+        { key: "role", name: "role", value: "editor", options: roles() },
       ],
       (values) => API("user", { method: "POST", body: values }),
       { saveKey: "create" },
@@ -167,11 +168,12 @@
           hint: I18n.t("userPasswordHint"),
           validator: (value) => value && (value.length < 6 || value.length > 256) ? I18n.t("passwordError") : "",
         },
+        ...UI.quotaFields(user.quota),
         { group: "userAudit", key: "created", name: "createTime", value: UI.date(user.createTime), readOnly: true, className: "num" },
         { key: "userUpdated", name: "updateTime", value: UI.date(user.updateTime), readOnly: true, className: "num" },
       ],
       (values) => {
-        const body = { id: user.id, userName: values.userName, nickname: values.nickname, role: values.role, isDisabled: isSelf ? user.isDisabled : values.isDisabled === "true" };
+        const body = { ...UI.quotaPayload(values), id: user.id, userName: values.userName, nickname: values.nickname, role: values.role, isDisabled: isSelf ? user.isDisabled : values.isDisabled === "true" };
         if (values.password) body.password = values.password;
         return API("user", { method: "PATCH", body });
       },

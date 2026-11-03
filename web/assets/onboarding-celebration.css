@@ -1,0 +1,178 @@
+.onboarding-celebration {
+  color: var(--color-text-primary);
+  background: var(--color-bg-surface);
+  padding: var(--space-6);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  overflow: hidden;
+  isolation: isolate;
+  container-type: inline-size;
+  container-name: onboarding-celebration;
+  font-family: var(--font-family);
+  line-height: var(--line-height);
+  max-inline-size: 960px;
+  margin-inline: auto;
+  text-align: start;
+}
+.onboarding-celebration .oc-heading { padding-inline: var(--space-6); }
+.onboarding-celebration .oc-eyebrow {
+  margin: 0 0 var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+.onboarding-celebration .oc-title { margin: 0; font-size: calc(var(--font-size-xl) * 1.6); font-weight: 600; line-height: 1.4; }
+.onboarding-celebration .oc-art { margin-block: var(--space-2); }
+.onboarding-celebration .oc-scene { display: block; inline-size: 100%; block-size: auto; overflow: visible; }
+/* 仅镜像飞行插画的叙事方向；署名、品牌和文字不翻转。 */
+.onboarding-celebration:dir(rtl) .oc-scene { transform: scaleX(-1); }
+.onboarding-celebration .oc-atmosphere { fill: var(--color-primary-subtle); opacity: .4; }
+.onboarding-celebration .oc-atmosphere-inner { fill: var(--color-primary-subtle); opacity: .4; }
+.onboarding-celebration .oc-shadow { fill: var(--color-text-primary); opacity: .07; }
+.onboarding-celebration .oc-horizon, .onboarding-celebration .oc-distant-line {
+  fill: none; stroke: var(--color-border-strong); stroke-width: 1; opacity: .5;
+}
+.onboarding-celebration .oc-distant-line { opacity: .4; }
+.onboarding-celebration .oc-dust { fill: var(--color-text-secondary); opacity: .4; }
+.onboarding-celebration .oc-orbit { fill: none; stroke: var(--color-primary); stroke-width: 1.5; stroke-dasharray: 2 7; opacity: .22; }
+.onboarding-celebration .oc-star-halo { fill: var(--color-primary-subtle); }
+.onboarding-celebration .oc-star-ring { fill: none; stroke: var(--color-primary); stroke-width: .75; opacity: .35; }
+.onboarding-celebration .oc-star-core { fill: var(--color-primary); }
+.onboarding-celebration .oc-star-satellite { fill: var(--color-text-secondary); opacity: .5; }
+.onboarding-celebration .oc-trousers { fill: var(--color-text-secondary); }
+.onboarding-celebration .oc-shoes, .onboarding-celebration .oc-hair { fill: var(--color-text-primary); }
+.onboarding-celebration .oc-shirt-accent { fill: var(--color-primary); }
+.onboarding-celebration .oc-shirt-neutral { fill: var(--color-bg-subtle); stroke: var(--color-border-strong); stroke-width: 1.5; }
+.onboarding-celebration .oc-seam { fill: none; stroke: var(--color-text-primary); stroke-width: 1; opacity: .25; }
+.onboarding-celebration .oc-face, .onboarding-celebration .oc-neck { fill: var(--color-bg-surface); stroke: var(--color-text-primary); stroke-width: 1.5; }
+.onboarding-celebration .oc-eye { fill: var(--color-text-primary); }
+.onboarding-celebration .oc-smile, .onboarding-celebration .oc-hair-detail { fill: none; stroke: var(--color-text-primary); stroke-width: 1.5; stroke-linecap: round; }
+.onboarding-celebration .oc-hair-detail { stroke: var(--color-bg-surface); opacity: .35; }
+.onboarding-celebration .oc-arm-back, .onboarding-celebration .oc-arm-front {
+  fill: none; stroke: var(--color-primary); stroke-width: 19; stroke-linecap: round;
+}
+.onboarding-celebration .oc-arm-neutral { stroke: var(--color-border-strong); }
+.onboarding-celebration .oc-hand-line { fill: none; stroke: var(--color-text-primary); stroke-width: 7; stroke-linecap: round; }
+.onboarding-celebration .oc-paper { fill: var(--color-bg-surface); stroke: var(--color-border-strong); stroke-width: 1.5; stroke-linejoin: round; }
+.onboarding-celebration .oc-paper-line { fill: none; stroke: var(--color-text-secondary); stroke-width: 2; }
+.onboarding-celebration .oc-paper-crease { fill: none; stroke: var(--color-primary); stroke-width: 1; }
+.onboarding-celebration .oc-plane-under { fill: var(--color-primary); stroke: var(--color-primary); stroke-width: 1; }
+.onboarding-celebration .oc-plane-wing { fill: var(--color-bg-surface); stroke: var(--color-primary); stroke-width: 1.5; stroke-linejoin: round; }
+.onboarding-celebration .oc-plane-wing-light { fill: var(--color-primary-subtle); stroke: var(--color-primary); stroke-width: 1; }
+.onboarding-celebration .oc-plane-crease { fill: none; stroke: var(--color-primary); stroke-width: 1; opacity: .6; }
+.onboarding-celebration .oc-plane-aura { fill: var(--color-primary-subtle); opacity: .5; }
+.onboarding-celebration .oc-plane-trail { fill: none; stroke: var(--color-primary); stroke-width: 1.5; opacity: .3; }
+.onboarding-celebration .oc-document { transform-origin: 348px 250px; }
+.onboarding-celebration .oc-fold { opacity: 0; transform-origin: 348px 250px; }
+.onboarding-celebration .oc-fold-arm-start { transform-origin: 266px 234px; }
+.onboarding-celebration .oc-fold-arm-end { transform-origin: 455px 239px; }
+.onboarding-celebration .oc-flight { transform: translate(622px, 244px) rotate(-8deg); }
+.onboarding-celebration .oc-plane { transform-origin: 0 0; }
+.onboarding-celebration .oc-keepsake { padding-inline: var(--space-6); }
+.onboarding-celebration .oc-message {
+  margin: 0;
+  max-inline-size: 48ch;
+  font-size: var(--font-size-lg);
+  text-wrap: pretty;
+}
+.onboarding-celebration .oc-signature {
+  display: flex; align-items: end; justify-content: space-between; gap: var(--space-4);
+  margin-block-start: var(--space-6); padding-block-start: var(--space-4);
+  border-block-start: 1px solid var(--color-border);
+}
+.onboarding-celebration .oc-owner { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; min-inline-size: 0; }
+.onboarding-celebration .oc-dedication, .onboarding-celebration .oc-brand { color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+.onboarding-celebration .oc-nickname { font-size: var(--font-size-sm); font-weight: 600; overflow-wrap: anywhere; }
+.onboarding-celebration .oc-brand { flex-shrink: 0; }
+.onboarding-celebration .oc-status { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); margin: 0; }
+
+/* 所有视觉共用十秒单次时间轴，隐藏时统一暂停；终态不保留任何动画。 */
+.onboarding-celebration[data-state="playing"] .oc-document { animation: oc-document 10s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-fold { animation: oc-fold 10s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-fold-arm-start { animation: oc-fold-start 10s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-fold-arm-end { animation: oc-fold-end 10s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-flight { animation: oc-flight 10s linear both; }
+.onboarding-celebration[data-state="playing"] .oc-plane { animation: oc-plane 10s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-orbit { animation: oc-orbit 10s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-star-1 { animation: oc-star-one 10s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-star-2 { animation: oc-star-two 10s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-star-3 { animation: oc-star-three 10s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-star-4 { animation: oc-star-four 10s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-star-5 { animation: oc-star-five 10s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-star-6 { animation: oc-star-five 10s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-keepsake { animation: oc-keepsake 10s ease-in-out both; }
+.onboarding-celebration[data-paused="true"] .oc-scene *, .onboarding-celebration[data-paused="true"] .oc-keepsake { animation-play-state: paused; }
+.onboarding-celebration[data-state="complete"] .oc-document, .onboarding-celebration[data-state="complete"] .oc-fold { opacity: 0; }
+.onboarding-celebration[data-state="complete"] .oc-orbit { opacity: .5; }
+.onboarding-celebration[data-state="complete"] .oc-fold-arm-start { transform: rotate(9deg); }
+.onboarding-celebration[data-state="complete"] .oc-fold-arm-end { transform: rotate(-9deg); }
+
+@keyframes oc-document {
+  0%, 6% { opacity: 1; transform: translateY(0) rotate(0); }
+  15% { opacity: 1; transform: translateY(3px) rotate(-5deg) scaleX(.8); }
+  23%, 100% { opacity: 0; transform: translateY(4px) rotate(-5deg) scaleX(.15); }
+}
+@keyframes oc-fold {
+  0%, 12% { opacity: 0; transform: scaleX(.3) rotate(-10deg); }
+  20%, 24% { opacity: 1; transform: scaleX(1) rotate(0); }
+  31%, 100% { opacity: 0; transform: scaleX(.8) rotate(-10deg); }
+}
+@keyframes oc-fold-start {
+  0%, 5% { transform: rotate(0); }
+  14% { transform: rotate(-8deg); }
+  24% { transform: rotate(1deg); }
+  33% { transform: rotate(-14deg); }
+  49%, 100% { transform: rotate(9deg); }
+}
+@keyframes oc-fold-end {
+  0%, 5% { transform: rotate(0); }
+  14% { transform: rotate(7deg); }
+  24% { transform: rotate(-1deg); }
+  33% { transform: rotate(9deg); }
+  49%, 100% { transform: rotate(-9deg); }
+}
+@keyframes oc-flight {
+  0%, 23% { opacity: 0; transform: translate(348px, 250px) rotate(-8deg); }
+  28% { opacity: 1; transform: translate(348px, 250px) rotate(-8deg); }
+  37% { opacity: 1; transform: translate(392px, 194px) rotate(-27deg); }
+  47% { transform: translate(451px, 120px) rotate(-22deg); }
+  57% { transform: translate(541px, 84px) rotate(12deg); }
+  67% { transform: translate(646px, 122px) rotate(40deg); }
+  75% { transform: translate(706px, 188px) rotate(67deg); }
+  80% { transform: translate(708px, 227px) rotate(110deg); }
+  84% { transform: translate(674px, 249px) rotate(162deg); }
+  89% { transform: translate(638px, 244px) rotate(290deg); }
+  95%, 100% { opacity: 1; transform: translate(622px, 244px) rotate(352deg); }
+}
+@keyframes oc-plane {
+  0%, 25% { transform: scale(.7); }
+  37% { transform: scale(.8); }
+  57% { transform: scale(.66); }
+  75% { transform: scale(.8); }
+  95%, 100% { transform: scale(1); }
+}
+@keyframes oc-orbit { 0%, 25% { opacity: .1; } 77%, 100% { opacity: .5; } }
+@keyframes oc-star-one { 0%, 31% { opacity: .13; } 38%, 100% { opacity: 1; } }
+@keyframes oc-star-two { 0%, 41% { opacity: .13; } 48%, 100% { opacity: 1; } }
+@keyframes oc-star-three { 0%, 51% { opacity: .13; } 58%, 100% { opacity: 1; } }
+@keyframes oc-star-four { 0%, 61% { opacity: .13; } 68%, 100% { opacity: 1; } }
+@keyframes oc-star-five { 0%, 69% { opacity: .13; } 76%, 100% { opacity: 1; } }
+@keyframes oc-keepsake { 0%, 78% { opacity: 0; transform: translateY(8px); } 96%, 100% { opacity: 1; transform: translateY(0); } }
+
+@media (max-width: 560px) {
+  .onboarding-celebration { padding: var(--space-4); }
+  .onboarding-celebration .oc-heading, .onboarding-celebration .oc-keepsake { padding-inline: 0; }
+  .onboarding-celebration .oc-title { font-size: calc(var(--font-size-xl) * 1.3); }
+  .onboarding-celebration .oc-signature { align-items: start; flex-direction: column; gap: var(--space-2); }
+  .onboarding-celebration .oc-message { font-size: var(--font-size-base); }
+}
+@container onboarding-celebration (max-width: 510px) {
+  .onboarding-celebration .oc-heading, .onboarding-celebration .oc-keepsake { padding-inline: 0; }
+  .onboarding-celebration .oc-title { font-size: calc(var(--font-size-xl) * 1.3); }
+  .onboarding-celebration .oc-signature { align-items: start; flex-direction: column; gap: var(--space-2); }
+  .onboarding-celebration .oc-message { font-size: var(--font-size-base); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-celebration .oc-scene *, .onboarding-celebration .oc-keepsake { animation: none !important; }
+  .onboarding-celebration .oc-document, .onboarding-celebration .oc-fold { opacity: 0; }
+  .onboarding-celebration .oc-keepsake { opacity: 1; transform: none; }
+}

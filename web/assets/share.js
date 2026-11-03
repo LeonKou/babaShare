@@ -1,9 +1,7 @@
 (async () => {
   "use strict";
   const { $, el, button, icon, toast, errorText } = UI;
-  const token = location.pathname.startsWith("/baba-share/s/")
-    ? decodeURIComponent(location.pathname.split("/")[3] || "")
-    : new URL(location.href).searchParams.get("token") || "";
+  const token = decodeURIComponent(location.pathname.match(/^\/baba-share\/s\/([^/]+)$/)?.[1] || "");
   let share = null;
   let currentFile = "";
   let previewBase = null;
@@ -269,6 +267,7 @@
     $("#share-status").textContent = I18n.t("loading");
     $("#share-stage").setAttribute("aria-busy", "true");
     try {
+      if (!token) throw new Error("INVALID_SHARE");
       const response = await loadDirectory("", $("#share-tree"));
       if (request !== loadingSequence) return;
       share = response.share;

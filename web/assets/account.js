@@ -58,20 +58,22 @@
         }),
         el(
           "div",
-          {},
-          el("h3", { text: me.nickname }),
+          { class: "profile-identity" },
+          el("h3", { dir: "auto", text: me.nickname }),
+          UI.quotaSummary(me.quota),
           el("p", { class: "muted small" }, I18n.t("accountName") + ": ",
             el("bdi", { dir: "auto", text: me.userName })),
           el(
             "div",
-            { class: "row small" },
+            { class: "row small profile-meta" },
             el("span", { class: "badge", text: I18n.t(me.role) }),
-            el("span", {
-              class: "muted num",
-              text: I18n.t("joinSince") + ": " + UI.date(me.createTime),
-            }),
+            el("span", { class: "muted" }, I18n.t("joinSince") + ": ",
+              el("bdi", { class: "num", dir: "ltr", text: UI.date(me.createTime) })),
           ),
         ),
+        me.role !== "admin" ? el("div", { class: "profile-actions" },
+          button("onboarding", () => bridge.request("shell.navigate", { routeId: "onboarding", params: {} })),
+        ) : null,
       );
     const visible = pager.slice(shares);
     $("#share-cards").replaceChildren(
@@ -181,7 +183,7 @@
       pageIndex = Math.max(1, Math.floor(Number(params.get("mcpPageIndex")) || 1));
       pageSize = [10, 20, 50].includes(Number(params.get("mcpPageSize"))) ? Number(params.get("mcpPageSize")) : 10;
       const filter = params.get("mcpStatus");
-      $("#mcp-filter").value = ["active", "expired", "revoked"].includes(filter) ? filter : "all";
+      $("#mcp-filter").value = ["active", "expired"].includes(filter) ? filter : "all";
     };
     const write = () => {
       const url = new URL(location.href);
@@ -220,9 +222,8 @@
       busy(value) { busy = value; },
     };
   })();
-  const keyState = (key) => key.revokedTime ? "revoked" :
-    key.expireTime && key.expireTime <= Date.now() ? "expired" : "active";
-  const keyError = (error) => ["MCP_KEY_LIMIT", "MCP_KEY_NOT_EXIST", "MCP_KEY_NOT_RECOVERABLE", "MCP_KEY_INACTIVE", "MCP_KEY_RECOVERY_UNAVAILABLE", "mcpUnavailable", "KEY_ALREADY_CREATED", "REQUEST_CONFLICT"].includes(error?.status)
+  const keyState = (key) => key.expireTime && key.expireTime <= Date.now() ? "expired" : "active";
+  const keyError = (error) => ["MCP_KEY_LIMIT", "MCP_KEY_NOT_EXIST", "MCP_KEY_INACTIVE", "MCP_KEY_RECOVERY_UNAVAILABLE", "mcpUnavailable", "KEY_ALREADY_CREATED", "REQUEST_CONFLICT"].includes(error?.status)
     ? I18n.t(error.status) : errorText(error);
   function renderKeys() {
     const activeCount = keys.filter((key) => keyState(key) === "active").length;
@@ -250,8 +251,6 @@
           el("bdi", { class: "num", dir: "ltr", text: UI.date(key.createTime) })),
         el("p", { class: "small muted" }, I18n.t("expires") + ": ",
           el("bdi", { class: "num", dir: "ltr", text: UI.date(key.expireTime) })),
-        key.revokedTime ? el("p", { class: "small muted" }, I18n.t("revoked") + ": ",
-          el("bdi", { class: "num", dir: "ltr", text: UI.date(key.revokedTime) })) : null,
         el("p", { id: "mcp-privacy-" + key.id, class: "form-note", text: I18n.t("mcpCopyPrivacy") }),
         status !== "active" ? el("p", { class: "form-note", text: I18n.t("MCP_KEY_INACTIVE") }) : null,
         el("footer", {}, deleteButton, copyButton),

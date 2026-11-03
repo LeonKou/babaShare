@@ -16,7 +16,7 @@ from backend.controller import run
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="启动 babaShare 服务")
-    parser.add_argument("--check", action="store_true", help="执行启动预检；会创建数据目录并初始化/迁移SQLite数据库")
+    parser.add_argument("--check", action="store_true", help="执行启动预检；会创建数据目录并按当前模型初始化SQLite数据库")
     args = parser.parse_args()
     try:
         run(Config.from_env(), check_only=args.check)

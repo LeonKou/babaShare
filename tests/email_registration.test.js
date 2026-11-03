@@ -7,12 +7,26 @@ class Element {
     Object.assign(this, { children: [], events: {}, dataset: {}, style: {}, value: "", textContent: "", disabled: false, attrs: {}, validity: { valid: true } });
     this.classList = { add() {}, remove() {} };
   }
-  append(...items) { this.children.push(...items.filter((item) => item != null)); for (const item of items) if (item?.attrs?.selected !== undefined) this.value = item.value; }
+  append(...items) {
+    this.children.push(...items.filter((item) => item != null));
+    for (const item of items) {
+      if (item && typeof item === "object") item.parentNode = this;
+      if (item?.attrs?.selected !== undefined) this.value = item.value;
+    }
+  }
+  replaceWith(node) {
+    const parent = this.parentNode;
+    parent.children.splice(parent.children.indexOf(this), 1, node);
+    node.parentNode = parent;
+    this.parentNode = null;
+  }
   replaceChildren(...items) { this.children = []; this.append(...items); }
   setAttribute(key, value) { this.attrs[key] = String(value); if (["value", "name", "id"].includes(key)) this[key] = value; }
   removeAttribute(key) { delete this.attrs[key]; }
   getAttribute(key) { return this.attrs[key]; }
   addEventListener(key, action) { this.events[key] = action; }
+  removeEventListener(key, action) { if (this.events[key] === action) delete this.events[key]; }
+  contains(node) { return this === node || this.children.some((child) => child?.contains?.(node)); }
   querySelectorAll() { return []; }
   querySelector() { return null; }
   reset() { this.elements.forEach((item) => item.value = ""); }
@@ -195,7 +209,7 @@ test("账户编辑包含完整业务字段、只读审计及三语校验，提�
   app.context.formDialog = app.context.UI.formDialog;
   app.context.$ = app.context.UI.$;
   app.context.me = { id: "other-admin" };
-  app.context.roles = () => ["viewer", "editor", "admin"].map((value) => ({ value, label: app.context.I18n.t(value) }));
+  app.context.roles = () => ["editor", "admin"].map((value) => ({ value, label: app.context.I18n.t(value) }));
   vm.runInContext(source.slice(source.indexOf("  async function editUser("), source.indexOf("  async function toggleUser(")), app.context);
   const requests = [];
   app.context.API = async (route, options) => { requests.push({ route, ...options }); return {}; };
@@ -203,8 +217,8 @@ test("账户编辑包含完整业务字段、只读审计及三语校验，提�
   for (const locale of ["zh-CN", "en-US", "ar-SA"]) {
     app.context.I18n.apply({ locale, theme: "dark" });
     await app.context.editUser(user);
-    assert.deepEqual(Array.from(dialog.fields, (field) => field.name), ["userName", "nickname", "email", "emailVerified", "role", "isDisabled", "password", "createTime", "updateTime"]);
-    assert.deepEqual(Array.from(dialog.fields.filter((field) => field.group), (field) => field.group), ["userAccountDetails", "userSecurity", "userAudit"]);
+    assert.deepEqual(Array.from(dialog.fields, (field) => field.name), ["userName", "nickname", "email", "emailVerified", "role", "isDisabled", "password", "fileCountLimitMode", "fileCountLimit", "storageBytesLimitMode", "storageBytesLimit", "storageBytesLimitUnit", "createTime", "updateTime"]);
+    assert.deepEqual(Array.from(dialog.fields.filter((field) => field.group), (field) => field.group), ["userAccountDetails", "userSecurity", "quotaFiles", "quotaStorage", "userAudit"]);
     assert.equal(dialog.options.dirty, true);
     assert(dialog.options.intro);
     const byName = (name) => dialog.fields.find((field) => field.name === name);
@@ -224,9 +238,9 @@ test("账户编辑包含完整业务字段、只读审计及三语校验，提�
     assert.equal(app.context.UI.errorText({ status: "SELF_DISABLE_FORBIDDEN" }), app.context.I18n.t("SELF_DISABLE_FORBIDDEN"));
     for (const field of dialog.fields) { assert.notEqual(app.context.I18n.t(field.key), app.context.I18n.t("unknownError")); if (field.group) assert.notEqual(app.context.I18n.t(field.group), app.context.I18n.t("unknownError")); }
     assert.equal(app.context.UI.errorText({ status: "USER_EXISTS" }), app.context.I18n.t("userAccountExists"));
-    await dialog.submit({ userName: email, nickname: "编辑后", role: "viewer", isDisabled: "true", password: "", createTime: "tampered", id: "tampered", password_hash: "secret" });
-    assert.deepEqual(JSON.parse(JSON.stringify(requests.at(-1))), { route: "user", method: "PATCH", body: { id: user.id, userName: email, nickname: "编辑后", role: "viewer", isDisabled: true } });
-    await dialog.submit({ userName: "new-name", nickname: "新名称", role: "admin", isDisabled: "false", password: "123456" });
+    await dialog.submit({ fileCountLimitMode: "inherit", storageBytesLimitMode: "inherit", userName: email, nickname: "编辑后", role: "editor", isDisabled: "true", password: "", createTime: "tampered", id: "tampered", password_hash: "secret" });
+    assert.deepEqual(JSON.parse(JSON.stringify(requests.at(-1))), { route: "user", method: "PATCH", body: { fileCountLimit: null, storageBytesLimit: null, id: user.id, userName: email, nickname: "编辑后", role: "editor", isDisabled: true } });
+    await dialog.submit({ fileCountLimitMode: "inherit", storageBytesLimitMode: "inherit", userName: "new-name", nickname: "新名称", role: "admin", isDisabled: "false", password: "123456" });
     assert.equal(requests.at(-1).body.password, "123456");
     assert.equal(requests.at(-1).body.isDisabled, false);
     app.context.me = { id: user.id };
@@ -235,7 +249,7 @@ test("账户编辑包含完整业务字段、只读审计及三语校验，提�
     assert.equal(selfStatus.readOnly, true);
     assert.equal(selfStatus.value, app.context.I18n.t("enabled"));
     assert.equal(selfStatus.hint, app.context.I18n.t("SELF_DISABLE_FORBIDDEN"));
-    await dialog.submit({ userName: user.userName, nickname: user.nickname, role: "viewer", isDisabled: "true" });
+    await dialog.submit({ fileCountLimitMode: "inherit", storageBytesLimitMode: "inherit", userName: user.userName, nickname: user.nickname, role: "editor", isDisabled: "true" });
     assert.equal(requests.at(-1).body.isDisabled, false);
     app.context.me = { id: "other-admin" };
   }
@@ -274,8 +288,8 @@ test("共享表单只读字段呈现文字并排除提交值，分组语义不�
     { group: "userAccountDetails", key: "displayName", name: "nickname", value: "名称" },
     { group: "userAudit", key: "created", name: "createTime", value: "审计时间", readOnly: true },
   ], async (values) => { submitted = values; return true; });
-  const node = app.context.document.body.children.at(-1), groupedForm = node.children[1];
-  const groups = groupedForm.children.filter((child) => child.tagName === "fieldset");
+  const node = app.context.document.body.children.at(-1), groupedForm = node.children.find((child) => child.tagName === "form");
+  const groups = groupedForm.children.find((child) => child.className === "form-drawer-body").children.filter((child) => child.tagName === "fieldset");
   assert.equal(groups.length, 2);
   assert(groups.every((group) => group.children[0].tagName === "legend"));
   await groupedForm.events.submit({ preventDefault() {} });
@@ -286,7 +300,7 @@ test("共享表单只读字段呈现文字并排除提交值，分组语义不�
   app.context.AppPage = { setDirty(value) { states.push(value); } };
   const passwordResult = app.context.UI.formDialog("密码", [{ key: "newPassword", name: "password", type: "password" }],
     async () => { if (++attempts === 1) throw Object.assign(new Error(), { status: "USER_EXISTS" }); return true; }, { dirty: true });
-  const passwordDialog = app.context.document.body.children.at(-1), passwordForm = passwordDialog.children[1];
+  const passwordDialog = app.context.document.body.children.at(-1), passwordForm = passwordDialog.children.find((child) => child.tagName === "form");
   const input = passwordForm.elements.namedItem("password");
   assert.equal(input.getAttribute("autocomplete"), "new-password");
   input.value = "draft-password";
@@ -300,14 +314,14 @@ test("共享表单只读字段呈现文字并排除提交值，分组语义不�
   assert.equal(input.value, "");
   assert.equal(states.at(-1), false);
   const cancelled = app.context.UI.formDialog("取消密码", [{ key: "newPassword", name: "password", type: "password" }], async () => true);
-  const cancelDialog = app.context.document.body.children.at(-1), cancelForm = cancelDialog.children[1];
+  const cancelDialog = app.context.document.body.children.at(-1), cancelForm = cancelDialog.children.find((child) => child.tagName === "form");
   const cancelledInput = cancelForm.elements.namedItem("password");
   cancelledInput.value = "cancelled-password";
   cancelDialog.close();
   assert.equal(await cancelled, null);
   assert.equal(cancelledInput.value, "");
   const dirtyResult = app.context.UI.formDialog("未保存密码", [{ key: "newPassword", name: "password", type: "password" }], async () => true, { dirty: true });
-  const dirtyDialog = app.context.document.body.children.at(-1), dirtyForm = dirtyDialog.children[1];
+  const dirtyDialog = app.context.document.body.children.at(-1), dirtyForm = dirtyDialog.children.find((child) => child.tagName === "form");
   const draft = dirtyForm.elements.namedItem("password");
   draft.value = "unsaved-password";
   dirtyForm.events.input();
@@ -359,7 +373,7 @@ test("本人账户列表不提供禁用按钮并展示原因", async () => {
 test("用户管理仅请求身份与账户列表，不依赖注册或邮件设置接口", async () => {
   const app = runtime("users.html", async (url) => {
     if (String(url).endsWith("/session/detail")) return result(200, { id: "admin", nickname: "管理员" });
-    if (String(url).endsWith("/user/list")) return result(200, [{ id: "user", nickname: "正常账户", userName: "tester", role: "viewer", createTime: 1 }]);
+    if (String(url).endsWith("/user/list")) return result(200, [{ id: "user", nickname: "正常账户", userName: "tester", role: "editor", createTime: 1 }]);
     throw Error("不得请求设置");
   });
   app.context.AbortController = AbortController;
@@ -806,7 +820,7 @@ test("邮件读取失败不阻塞总注册关闭，但开放邮箱注册仍不�
 });
 
 test("非管理员不能读取设置，邮件配置故障保留重试且不伪装权限错误", async () => {
-  const denied = await settingsRuntime({ role: "viewer" });
+  const denied = await settingsRuntime({ role: "editor" });
   assert.equal(denied.calls.length, 1);
   assert.equal(denied.get("#settings-status").textContent, denied.context.I18n.t("permissionDenied"));
   for (const mailStatus of [404, 403]) {
@@ -1071,6 +1085,64 @@ test("最终后端邮件错误码全部映射三语操作提示，不暴露原�
   app.context.I18n.apply({ locale: "zh-CN" });
   assert.match(app.context.I18n.t("EMAIL_SESSION_MISMATCH"), /重新发起.*不要重复使用旧链接/);
   assert.match(app.context.I18n.t("MAIL_ORIGIN_REQUIRED"), /管理员.*可访问.*保存邮件设置/);
+});
+
+test("配额两维独立继承和不限，容量换算精确且拒绝溢出及小数bytes", () => {
+  const app = runtime("users.html", async () => result(200, {}));
+  app.load("i18n.js"); app.load("common.js");
+  const { quotaValue, quotaPayload, quotaFields } = app.context.UI;
+  const plain = (value) => JSON.parse(JSON.stringify(value));
+  assert.deepEqual(plain(quotaPayload({ fileCountLimitMode: "inherit", storageBytesLimitMode: "custom", storageBytesLimit: "1.5", storageBytesLimitUnit: "MiB" })), { fileCountLimit: null, storageBytesLimit: 1572864 });
+  assert.deepEqual(plain(quotaPayload({ fileCountLimitMode: "unlimited", storageBytesLimitMode: "inherit" })), { fileCountLimit: 0, storageBytesLimit: null });
+  assert.deepEqual(plain(quotaPayload({ defaultFileCountLimitMode: "custom", defaultFileCountLimit: "100", defaultStorageBytesLimitMode: "unlimited" }, true)), { defaultFileCountLimit: 100, defaultStorageBytesLimit: 0 });
+  assert.equal(quotaValue("custom", "0.00000095367431640625", "MiB"), 1);
+  assert.equal(quotaValue("custom", "9007199254740991", "B"), Number.MAX_SAFE_INTEGER);
+  for (const [value, unit] of [["1.1", "B"], ["0.1", "MiB"], ["9007199254740992", "B"], ["-1", "B"], ["1e3", "B"], ["0", "B"], ["", "B"]])
+    assert.throws(() => quotaValue("custom", value, unit), (error) => error.status === "QUOTA_INVALID");
+  const fields = quotaFields({ fileCountLimit: null, storageBytesLimit: 0 });
+  assert.equal(fields.find((field) => field.name === "fileCountLimitMode").value, "inherit");
+  assert.equal(fields.find((field) => field.name === "storageBytesLimitMode").value, "unlimited");
+  for (const bytes of [1, 1048577, 1073741824, Number.MAX_SAFE_INTEGER]) {
+    const fields = quotaFields({ storageBytesLimit: bytes });
+    const values = Object.fromEntries(fields.map((field) => [field.name, field.value]));
+    assert.equal(quotaPayload(values).storageBytesLimit, bytes);
+  }
+});
+
+test("默认配额独立保存不校验SMTP且保留注册邮件草稿，取消不写入", async () => {
+  const app = await settingsRuntime({ registrationEnabled: true, emailRegistrationEnabled: true });
+  const form = app.get("#registration-form"), host = form.elements.namedItem("host");
+  host.value = ""; form.events.input();
+  app.context.UI.validate = () => { throw Error("配额不能校验SMTP草稿"); };
+  let dialog;
+  app.context.UI.formDialog = async (title, fields, submit, options) => { dialog = { fields, submit, options }; return null; };
+  await app.get("#quota-settings-edit").events.click();
+  assert.equal(app.calls.length, 3); assert.equal(app.bridge.dirty, true); assert.equal(host.value, "");
+  assert.equal(dialog.options.dirty, true);
+  await dialog.submit({ defaultFileCountLimitMode: "custom", defaultFileCountLimit: "5", defaultStorageBytesLimitMode: "custom", defaultStorageBytesLimit: "2", defaultStorageBytesLimitUnit: "GiB" });
+  assert.deepEqual(JSON.parse(app.calls.at(-1).options.body), { defaultFileCountLimit: 5, defaultStorageBytesLimit: 2147483648 });
+  assert.equal(app.bridge.dirty, true); assert.equal(host.value, "");
+});
+
+test("配额和空间角色三语文案、错误反馈与RTL数字隔离", () => {
+  const app = runtime("users.html", async () => result(200, {})); app.load("i18n.js"); app.load("common.js");
+  const keys = ["quotaDefaults", "quotaDefaultsHint", "quotaFiles", "quotaStorage", "quotaMode", "quotaInherit", "quotaUnlimited", "quotaCustom", "quotaUnit", "quotaUnitHint", "quotaValueHint", "memberRole", "memberRoleHint", "memberRole_viewer", "memberRole_editor", "memberRole_manager", "QUOTA_INVALID", "FILE_COUNT_QUOTA_EXCEEDED", "STORAGE_QUOTA_EXCEEDED"];
+  for (const locale of ["zh-CN", "en-US", "ar-SA"]) for (const theme of ["light", "dark"]) {
+    app.context.I18n.apply({ locale, theme });
+    for (const key of keys) { assert.notEqual(app.context.I18n.t(key), key); assert.notEqual(app.context.I18n.t(key), app.context.I18n.t("unknownError")); }
+    for (const status of keys.slice(-3)) assert.equal(app.context.UI.errorText({ status }), app.context.I18n.t(status));
+    const summary = app.context.UI.quotaSummary({ usedFileCount: 2, usedStorageBytes: 1048576, effectiveFileCountLimit: 0, effectiveStorageBytesLimit: 2147483648 });
+    assert.equal(summary.children.length, 2);
+    assert(summary.children.every((line) => line.children.at(-1).attrs.dir === "ltr"));
+  }
+  assert.equal(app.context.I18n.ctx.dir, "rtl");
+  app.context.I18n.apply({ locale: "zh-CN" });
+  assert.equal(app.context.I18n.t("memberSummary", { total: 3, collaborators: 2 }), "3 人 · 2 人可编辑");
+  app.context.I18n.apply({ locale: "en-US" });
+  assert.equal(app.context.I18n.t("memberSummary", { total: 3, collaborators: 2 }), "3 members · 2 with write access");
+  const users = fs.readFileSync(path.join(assets, "users.js"), "utf8");
+  assert.match(users, /return \["editor", "admin"\]/);
+  assert.match(users, /value: "editor", options: roles\(\)/);
 });
 
 test("邮箱新文案三语齐全并兼容六强调色、双主题、阿语方向", () => {

@@ -31,6 +31,22 @@
     feedback.dataset.state = state;
     if (state === "success" || state === "error") UI.toast(message, { kind: state });
   }
+  function quotaSummary() {
+    if (!saved) return;
+    $("#quota-default-summary").replaceChildren(UI.quotaSummary({ usedFileCount: 0, usedStorageBytes: 0,
+      effectiveFileCountLimit: saved.defaultFileCountLimit ?? 0, effectiveStorageBytesLimit: saved.defaultStorageBytesLimit ?? 0 }, { defaults: true }));
+  }
+  $("#quota-settings-edit").addEventListener("click", async () => {
+    if (!saved || busy) return;
+    const updated = await UI.formDialog(I18n.t("quotaDefaults"), UI.quotaFields(saved, true),
+      (values) => API("setting", { method: "PATCH", body: UI.quotaPayload(values, true) }),
+      { intro: I18n.t("quotaDefaultsHint"), dirty: true });
+    if (updated) {
+      saved.defaultFileCountLimit = updated.defaultFileCountLimit;
+      saved.defaultStorageBytesLimit = updated.defaultStorageBytesLimit;
+      quotaSummary();
+    }
+  });
   function summary() {
     if (!saved) return;
     const key = !saved.registrationEnabled ? "registrationOff" : saved.emailRegistrationEnabled ? "registrationEmailOn" : "registrationNormalOn";
@@ -86,6 +102,7 @@
       try { mail = await API("mailSettings"); mailError = null; }
       catch (error) { mail = null; mailError = error; }
       restore(); form.hidden = false;
+      $("#quota-settings").hidden = false; quotaSummary();
       showStatus(mailError ? (mailError.httpStatus === 404 ? I18n.t("mailSettingsUnavailable") : errorText(mailError)) : "", Boolean(mailError));
       if (mailError) status.append(button("retry", load));
     } catch (error) {
@@ -147,7 +164,7 @@
   });
   window.addEventListener("pagehide", () => { if (inputs.password) inputs.password.value = ""; });
   I18n.subscribe(() => {
-    summary(); document.title = `${I18n.t("settings")} · babaShare`;
+    summary(); quotaSummary(); document.title = `${I18n.t("settings")} · babaShare`;
     for (const config of configs) {
       const input = inputs[config.name || config.key];
       if (!input) continue;

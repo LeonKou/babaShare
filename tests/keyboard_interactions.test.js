@@ -60,6 +60,12 @@ function runtime(query = "") {
         node.parentNode = this;
       }
     }
+    replaceWith(node) {
+      const parent = this.parentNode, index = parent.children.indexOf(this);
+      this.remove();
+      parent.children.splice(index, 0, node);
+      node.parentNode = parent;
+    }
     prepend(...nodes) { this.append(...nodes); this.children.unshift(...this.children.splice(-nodes.length)); }
     replaceChildren(...nodes) { for (const child of [...this.children]) child.remove(); this.append(...nodes); }
     remove() {
@@ -110,11 +116,15 @@ function runtime(query = "") {
     getClientRects() { return this.isConnected && !this.closest("[hidden]") && this.style.display !== "none" ? [{}] : []; }
     focus() {
       if (this.disabled || !this.getClientRects().length || this.closest("[inert]")) return;
+      const previous = document.activeElement;
+      if (previous === this) return;
       document.activeElement = this;
-      dispatch(this, "focusin");
+      if (previous) dispatch(previous, "focusout", { relatedTarget: this });
+      dispatch(this, "focusin", { relatedTarget: previous });
     }
     scrollIntoView() {}
     addEventListener(type, fn, options) { listen(this.events, type, fn, options); }
+    removeEventListener(type, fn) { this.events.set(type, (this.events.get(type) || []).filter((entry) => entry.fn !== fn)); }
     showModal() { this.setAttribute("open", ""); }
     close() { this.removeAttribute("open"); dispatch(this, "close"); }
   }
@@ -138,7 +148,8 @@ function runtime(query = "") {
     location: new URL("http://localhost/baba-share/account.html" + query),
     history: { state: null, replaceState(state, _, url) { this.state = state; context.location = new URL(url); } },
     addEventListener(type, fn, options) { listen(listeners, type, fn, options); },
-    removeEventListener() {}, setTimeout: () => 1, clearTimeout() {}, queueMicrotask,
+    removeEventListener(type, fn) { listeners.set(type, (listeners.get(type) || []).filter((entry) => entry.fn !== fn)); },
+    setTimeout: () => 1, clearTimeout() {}, queueMicrotask,
     getComputedStyle: (node) => ({ visibility: node.style.visibility || "visible" }),
     I18n: { t: (key) => key, ctx: { dir: "ltr", locale: "zh-CN" }, subscribe() {} },
     FormData: class {
@@ -190,6 +201,311 @@ function runtime(query = "") {
   return { context, document, dispatch, enter, load, tick: (ms) => { now += ms; },
     el: context.UI.el, $: (selector) => document.querySelector(selector) };
 }
+
+async function authFixture({ state = {}, submit = async () => ({}), query = "" } = {}) {
+  const app = runtime(query);
+  app.context.location = new URL("http://localhost/baba-share/auth.html" + query);
+  app.load("i18n.js");
+  const form = app.el("form", { id: "auth-form", novalidate: "" });
+  for (const id of ["auth-title", "auth-hint", "auth-fields", "auth-status", "auth-switch"])
+    form.append(app.el("div", { id }));
+  form.append(app.el("button", { id: "auth-submit", type: "submit" }));
+  app.document.body.append(form);
+  for (const id of ["auth-settings", "security-icon", "auth-story-title"])
+    app.document.body.append(app.el("div", { id }));
+  const demo = app.el("div", { id: "auth-product-demo" }), covers = [];
+  demo.setPasswordCovered = (value) => { assert.equal(typeof value, "boolean"); covers.push(value); };
+  app.document.body.append(demo);
+  const calls = [];
+  app.context.API = async (route, options) => {
+    if (route === "install") return { setupRequired: false, registrationEnabled: true, ...state };
+    calls.push({ route, options });
+    return submit(route, options);
+  };
+  let submissions = 0;
+  form.addEventListener("submit", () => { submissions++; });
+  await app.load("auth.js");
+  return { ...app, form, calls, covers, submissions: () => submissions,
+    password: () => form.elements.namedItem("password"), toggle: () => app.$(".auth-password-toggle") };
+}
+
+test("密码组仅以焦点驱动捂眼，组内往返无解除帧，明文离组仍恢复", async () => {
+  const app = await authFixture(), input = app.password(), toggle = app.toggle();
+  Object.defineProperty(input, "value", { get() { assert.fail("焦点联动不得读取密码"); } });
+  input.focus();
+  assert.equal(app.covers.at(-1), true);
+  app.covers.length = 0;
+  toggle.focus();
+  app.enter(toggle);
+  input.focus();
+  toggle.focus();
+  assert(app.covers.length > 0 && app.covers.every((value) => value === true));
+  assert.equal(input.type, "text");
+  app.form.elements.namedItem("userName").focus();
+  assert.equal(app.covers.at(-1), false);
+  assert.equal(input.type, "text");
+  toggle.focus();
+  assert.equal(app.covers.at(-1), true);
+  app.dispatch(toggle, "focusout", { relatedTarget: null });
+  assert.equal(app.covers.at(-1), false);
+  assert.equal(app.calls.length, 0);
+});
+
+test("模式和主题重绘释放旧组事件，页面离开清理，缓存返回重新绑定", async () => {
+  const app = await authFixture();
+  for (const redraw of [() => app.context.I18n.apply({ locale: "ar-SA", theme: "light" }), () => app.enter(app.$("#auth-switch button"))]) {
+    const input = app.password(), control = input.parentNode, toggle = app.toggle();
+    input.focus();
+    redraw();
+    assert.equal(app.covers.at(-1), false);
+    for (const name of ["focusin", "focusout"]) assert.equal(control.events.get(name).length, 0);
+    assert.equal(toggle.events.get("click").length, 0);
+    const count = app.covers.length;
+    app.dispatch(control, "focusin"); app.dispatch(toggle, "click");
+    assert.equal(app.covers.length, count);
+  }
+  app.enter(app.$("#auth-switch button"));
+  const toggle = app.toggle(), control = app.password().parentNode;
+  app.dispatch(toggle, "click");
+  app.dispatch(app.document.body, "pagehide", { persisted: true });
+  assert.equal(app.covers.at(-1), false);
+  assert.equal(app.password().type, "password");
+  assert.equal(control.events.get("focusin").length, 0);
+  app.dispatch(app.document.body, "pageshow", { persisted: true });
+  assert.equal(control.events.get("focusin").length, 1);
+  assert.equal(app.covers.at(-1), true);
+  app.dispatch(app.document.body, "pagehide", { persisted: false });
+  assert.equal(app.covers.at(-1), false);
+  app.dispatch(app.document.body, "pageshow");
+  assert.equal(control.events.get("focusin").length, 0);
+  const old = app.password();
+  app.context.I18n.apply({ locale: "en-US" });
+  assert.equal(app.password(), old, "卸载后不再响应重绘");
+});
+
+test("提交期间解除捂眼并移除交互，失败后重新按当前焦点响应", async () => {
+  let reject;
+  const app = await authFixture({ submit: () => new Promise((_, fail) => { reject = fail; }) });
+  app.form.elements.namedItem("userName").value = "fictional-user";
+  app.password().value = "fictional-password";
+  app.password().focus();
+  app.enter(app.password());
+  assert.equal(app.covers.at(-1), false);
+  assert.equal(app.password().parentNode.events.get("focusin").length, 0);
+  app.dispatch(app.password(), "focusin");
+  assert.equal(app.covers.at(-1), false);
+  reject({ status: "LOGIN_FAILED" });
+  await settleUsers();
+  assert.equal(app.password().parentNode.events.get("focusin").length, 1);
+  assert.equal(app.covers.at(-1), true);
+  app.form.elements.namedItem("userName").focus();
+  assert.equal(app.covers.at(-1), false);
+});
+
+test("登录密码默认掩码，点击显隐两次不提交、不替换输入或改变值和自动填充", async () => {
+  const app = await authFixture(), password = app.password(), toggle = app.toggle();
+  password.value = "  测试-only-سري  ";
+  assert.equal(password.type, "password");
+  assert.equal(password.autocomplete, "current-password");
+  assert.equal(toggle.type, "button");
+  assert.equal(toggle.name, undefined);
+  assert.equal(toggle.getAttribute("aria-controls"), password.id);
+  assert.equal(toggle.getAttribute("aria-pressed"), "false");
+  assert.equal(toggle.getAttribute("aria-label"), "显示密码");
+  assert.equal(password.parentNode.children[1], toggle);
+  const description = password.getAttribute("aria-describedby");
+  const icon = toggle.querySelector("path").getAttribute("d");
+  for (const visible of [true, false]) {
+    app.dispatch(toggle, "click");
+    assert.equal(app.password(), password);
+    assert.equal(password.type, visible ? "text" : "password");
+    assert.equal(password.value, "  测试-only-سري  ");
+    assert.equal(password.autocomplete, "current-password");
+    assert.equal(password.name, "password");
+    assert.equal(password.getAttribute("aria-describedby"), description);
+    assert.equal(toggle.getAttribute("aria-pressed"), String(visible));
+    assert.equal(toggle.getAttribute("aria-label"), visible ? "隐藏密码" : "显示密码");
+    assert.equal(toggle.querySelector("svg").getAttribute("aria-hidden"), "true");
+    assert.equal(toggle.querySelector("path").getAttribute("d") === icon, !visible);
+  }
+  toggle.focus();
+  app.enter(toggle);
+  assert.equal(password.type, "text");
+  assert.equal(app.document.activeElement, toggle);
+  app.enter(toggle);
+  assert.equal(password.type, "password");
+  for (const expected of ["text", "password"]) {
+    const down = app.dispatch(toggle, "keydown", { key: " " });
+    const up = app.dispatch(toggle, "keyup", { key: " " });
+    if (!down.defaultPrevented && !up.defaultPrevented && !toggle.disabled) {
+      const click = app.dispatch(toggle, "click");
+      if (!click.defaultPrevented && toggle.type === "submit") app.dispatch(app.form, "submit");
+    }
+    assert.equal(password.type, expected);
+    assert.equal(app.document.activeElement, toggle);
+  }
+  assert.equal(app.submissions(), 0);
+  assert.equal(app.calls.length, 0);
+});
+
+test("登录注册模式往返恢复掩码，旧输入也被掩码且注册不出现眼睛", async () => {
+  for (const emailRegistrationEnabled of [false, true]) {
+    const app = await authFixture({ state: { emailRegistrationEnabled } }), old = app.password();
+    old.value = "test-password";
+    app.dispatch(app.toggle(), "click");
+    app.enter(app.$("#auth-switch button"));
+    assert.equal(old.type, "password");
+    assert.equal(app.toggle(), null);
+    if (!emailRegistrationEnabled) {
+      assert.equal(app.password().type, "password");
+      assert.equal(app.password().value, "test-password");
+      assert.equal(app.password().autocomplete, "new-password");
+    } else assert.equal(app.password(), undefined);
+    app.enter(app.$("#auth-switch button"));
+    assert.equal(app.password().type, "password");
+    assert.equal(app.toggle().getAttribute("aria-pressed"), "false");
+    assert.equal(app.password().autocomplete, "current-password");
+  }
+  const setup = await authFixture({ state: { setupRequired: true } });
+  assert.equal(setup.toggle(), null);
+  assert.equal(setup.password().type, "password");
+});
+
+test("无效提交也立即恢复掩码，校验和密码值保持", async () => {
+  const app = await authFixture();
+  app.password().value = "test-password";
+  app.dispatch(app.toggle(), "click");
+  app.enter(app.password());
+  assert.equal(app.password().type, "password");
+  assert.equal(app.password().value, "test-password");
+  assert.equal(app.toggle().disabled, false);
+  assert.equal(app.toggle().getAttribute("aria-label"), "显示密码");
+  assert.equal(app.calls.length, 0);
+  assert.equal(app.document.activeElement.name, "userName");
+});
+
+test("提交前恢复掩码，等待中禁止再显示，成功失败及语言重绘后均保持掩码", async () => {
+  for (const failure of [false, true]) {
+    let finish;
+    const app = await authFixture({ submit: () => new Promise((resolve, reject) => {
+      finish = () => failure ? reject({ status: "LOGIN_FAILED" }) : resolve({});
+    }) });
+    app.form.elements.namedItem("userName").value = "test-user";
+    app.password().value = "test-password";
+    app.dispatch(app.toggle(), "click");
+    app.enter(app.password());
+    assert.equal(app.password().type, "password");
+    assert.equal(app.toggle().disabled, true);
+    assert.equal(app.calls.length, 1);
+    assert.equal(app.calls[0].route, "login");
+    assert.deepEqual(JSON.parse(JSON.stringify(app.calls[0].options.body)), { userName: "test-user", password: "test-password" });
+    app.context.I18n.apply({ locale: "en-US" });
+    assert.equal(app.toggle().disabled, true);
+    app.dispatch(app.toggle(), "click");
+    app.dispatch(app.form, "submit");
+    assert.equal(app.password().type, "password");
+    assert.equal(app.calls.length, 1);
+    finish();
+    await settleUsers();
+    assert.equal(app.password().type, "password");
+    assert.equal(app.password().value, "test-password");
+    assert.equal(app.toggle().disabled, false);
+    assert.equal(app.toggle().getAttribute("aria-pressed"), "false");
+    assert.equal(app.toggle().getAttribute("aria-label"), "Show password");
+    assert.equal(app.form.getAttribute("aria-busy"), "false");
+  }
+});
+
+test("密码按钮中英阿名称与状态同步，语言切换恢复掩码并保留值及主题方向", async () => {
+  const app = await authFixture();
+  app.password().value = "test-password";
+  for (const [locale, show, hide, dir] of [
+    ["zh-CN", "显示密码", "隐藏密码", "ltr"],
+    ["en-US", "Show password", "Hide password", "ltr"],
+    ["ar-SA", "إظهار كلمة المرور", "إخفاء كلمة المرور", "rtl"],
+  ]) for (const theme of ["light", "dark"]) {
+    app.context.I18n.apply({ locale, theme });
+    assert.equal(app.password().type, "password");
+    assert.equal(app.password().value, "test-password");
+    assert.equal(app.toggle().getAttribute("aria-label"), show);
+    assert.equal(app.toggle().getAttribute("data-i18n-label"), "authShowPassword");
+    assert.equal(app.document.documentElement.dir, dir);
+    assert.equal(app.document.documentElement.dataset.mode, theme);
+    app.dispatch(app.toggle(), "click");
+    assert.equal(app.toggle().getAttribute("aria-label"), hide);
+    assert.equal(app.toggle().getAttribute("data-i18n-label"), "authHidePassword");
+    assert.equal(app.toggle().getAttribute("aria-pressed"), "true");
+  }
+});
+
+test("密码按钮样式限定登录表单，逻辑末端镜像并预留40像素热区与文字空间", () => {
+  const css = fs.readFileSync(path.join(assets, "components.css"), "utf8");
+  assert.match(css, /#auth-form \.auth-password-control\{position:relative;min-inline-size:0\}/);
+  assert.match(css, /#auth-form \.auth-password-control>input\{[^}]*padding-inline-end:calc\(40px \+ var\(--space-2\)\)/);
+  assert.match(css, /#auth-form \.auth-password-toggle\{[^}]*inset-inline-end:0;inset-block:0;inline-size:40px;min-block-size:40px/);
+});
+
+test("登录密码仅屏蔽自定义控件内的Edge原生显隐，沿用主题焦点和图标色", () => {
+  const css = fs.readFileSync(path.join(assets, "components.css"), "utf8");
+  const revealRules = css.split("}").filter((rule) => rule.includes("::-ms-reveal"));
+  assert.equal(revealRules.length, 1);
+  assert.match(revealRules[0], /#auth-form \.auth-password-control>input::-ms-reveal\{display:none$/);
+  assert.match(css, /:focus-visible\{outline:2px solid var\(--color-border-focus\)\}/);
+  assert.match(css, /button,a,input,select,summary,textarea\{outline-offset:-2px\}/);
+  assert.match(css, /#auth-form \.auth-password-toggle\{[^}]*color:var\(--color-text-secondary\)/);
+});
+
+test("密码显隐及语言主题重绘不记录密码，偏好存储仅包含界面上下文", async () => {
+  const app = await authFixture(), writes = [], logs = [];
+  app.context.localStorage = { setItem: (...args) => writes.push(args) };
+  app.context.sessionStorage = { setItem: (...args) => writes.push(args) };
+  app.context.console = Object.fromEntries(["log", "info", "warn", "error", "debug"].map((key) => [key, (...args) => logs.push(args)]));
+  const secret = "fictional-私密-Only-789";
+  app.password().value = secret;
+  app.dispatch(app.toggle(), "click");
+  app.dispatch(app.toggle(), "click");
+  assert.equal(writes.length, 0);
+  app.dispatch(app.toggle(), "click");
+  const language = app.$('#auth-settings select[data-i18n-label="language"]');
+  language.value = "ar-SA";
+  app.dispatch(language, "change");
+  app.dispatch(app.$('#auth-settings button[data-i18n-label="theme"]'), "click");
+  assert.equal(app.password().type, "password");
+  assert.equal(app.password().value, secret);
+  assert.equal(writes.length, 2);
+  for (const [key, value] of writes) {
+    assert.equal(key, "baba-share-context");
+    assert.equal(value.includes(secret), false);
+    assert.equal(Object.hasOwn(JSON.parse(value), "password"), false);
+  }
+  assert.deepEqual(logs, []);
+  assert.equal(app.context.location.href.includes(secret), false);
+  assert.equal(app.calls.length, 0);
+});
+
+test("显隐不改变普通及邀请登录请求和成功跳转，密码不进入URL", async () => {
+  const token = "a".repeat(43);
+  for (const query of ["", "#invite=" + token]) {
+    const app = await authFixture({ query, submit: () => {
+      assert.equal(app.password().type, "password");
+      return {};
+    } });
+    app.form.elements.namedItem("userName").value = "fictional-user";
+    app.password().value = "  fictional-password  ";
+    app.dispatch(app.toggle(), "click");
+    app.enter(app.password());
+    await settleUsers();
+    assert.equal(app.calls.length, 1);
+    assert.equal(app.calls[0].route, "login");
+    assert.equal(app.calls[0].options.method, "POST");
+    assert.deepEqual(JSON.parse(JSON.stringify(app.calls[0].options.body)), {
+      userName: "fictional-user", password: "  fictional-password  ",
+    });
+    assert.equal(app.context.location.href, query
+      ? app.context.UI.invitationUrl("invite", token) : app.context.UI.routeUrl("shell"));
+    assert.equal(app.password().type, "password");
+  }
+});
 
 function formFixture(app) {
   const form = app.el("form"), input = app.el("input", { type: "text" }), textarea = app.el("textarea");
@@ -276,6 +592,118 @@ test("真实共享formDialog以普通Enter提交、输入法确认不调用业�
   assert.equal(await result, "created");
   assert.equal(values.name, "测试名称");
   assert.equal(values.description, "首行\n");
+});
+
+test("共享表单铺满当前文档，初始焦点仍到字段，返回/关闭/面包屑退出回触发点", async () => {
+  for (const selector of [".form-drawer-back", ".form-drawer-close", ".form-drawer-crumbs button"]) {
+    const app = runtime(), main = app.el("main"), trigger = app.el("button");
+    main.append(app.el("h1", { text: "用户" }), trigger); app.document.body.append(main);
+    app.document.body.style.overflow = "auto"; trigger.focus();
+    const result = app.context.UI.formDialog("编辑用户", [{ key: "name", value: "原值" }], async () => true);
+    const drawer = app.$("dialog[open]");
+    assert.equal(drawer.className, "form-drawer");
+    assert.equal(drawer.querySelector("h2").textContent, "编辑用户");
+    assert.equal(drawer.querySelector('[aria-current="page"]').textContent, "编辑用户");
+    assert.equal(drawer.getAttribute("aria-labelledby"), drawer.querySelector("h2").id);
+    assert.equal(app.document.activeElement, drawer.querySelector("input"));
+    assert.equal(app.document.body.style.overflow, "hidden");
+    assert.equal(drawer.querySelector(".form-feedback").parentNode, drawer.querySelector("form"));
+    assert.equal(drawer.querySelector("input").closest(".form-drawer-body") !== null, true);
+    app.enter(drawer.querySelector(selector));
+    assert.equal(await result, null);
+    assert.equal(app.document.body.style.overflow, "auto");
+    assert.equal(app.document.activeElement, trigger);
+  }
+});
+
+test("返回关闭取消及Esc共用未保存确认，取消保留草稿且确认弹窗不变整页", async () => {
+  for (const selector of [".form-drawer-back", ".form-drawer-close", '.actions button[data-i18n="cancel"]', "Escape"]) {
+    const app = runtime();
+    const bridge = { dirty: false, setDirty(value) { this.dirty = value; } };
+    app.context.AppPage = bridge;
+    const result = app.context.UI.formDialog("编辑", [{ key: "name", value: "原值" }], async () => true);
+    const drawer = app.$("dialog[open]"), input = drawer.querySelector("input");
+    input.value = "未保存草稿"; app.dispatch(input, "input");
+    assert.equal(bridge.dirty, true);
+    if (selector === "Escape") app.dispatch(drawer, "cancel");
+    else app.enter(drawer.querySelector(selector));
+    const confirm = app.document.querySelectorAll("dialog[open]").at(-1);
+    assert.notEqual(confirm, drawer);
+    assert.equal(confirm.className, "");
+    app.enter(confirm.querySelector('[data-confirm-action="cancel"]'));
+    await settleUsers();
+    assert.equal(input.value, "未保存草稿");
+    assert.equal(bridge.dirty, true);
+    assert.equal(app.document.body.style.overflow, "hidden");
+    app.dispatch(drawer, "cancel");
+    app.enter(app.$('[data-confirm-action="confirm"]'));
+    assert.equal(await result, null);
+    assert.equal(bridge.dirty, false);
+    assert.equal(app.$("dialog[open]"), null);
+  }
+});
+
+test("选择字段change触发dirty，嵌套表单关闭保留外层dirty和滚动锁", async () => {
+  const app = runtime();
+  app.context.AppPage = { dirty: false, setDirty(value) { this.dirty = value; } };
+  const outer = app.context.UI.formDialog("外层", [{ key: "role", options: [{ value: "a", label: "角色" }] }], async () => true);
+  const first = app.$("dialog[open]");
+  app.dispatch(first.querySelector("select"), "change");
+  assert.equal(app.context.AppPage.dirty, true);
+  const inner = app.context.UI.formDialog("内层", [{ key: "name" }], async () => true);
+  app.dispatch(app.document.querySelectorAll("dialog[open]").at(-1), "cancel");
+  await inner;
+  assert.equal(app.context.AppPage.dirty, true);
+  assert.equal(app.document.body.style.overflow, "hidden");
+  app.dispatch(first, "cancel"); app.enter(app.$('[data-confirm-action="confirm"]'));
+  await outer;
+  assert.equal(app.context.AppPage.dirty, false);
+});
+
+test("整页表单提交期间全部退出入口禁用且Esc不关闭，失败恢复并保留草稿", async () => {
+  const app = runtime();
+  let reject, calls = 0;
+  app.context.AppPage = { dirty: false, setDirty(value) { this.dirty = value; } };
+  const result = app.context.UI.formDialog("编辑", [{ key: "name", required: true, value: "原值" }], () => {
+    calls++; return new Promise((_, fail) => { reject = fail; });
+  });
+  const drawer = app.$("dialog[open]"), form = drawer.querySelector("form"), input = form.querySelector("input");
+  input.value = "草稿"; app.dispatch(input, "input"); app.enter(input);
+  assert.equal(calls, 1);
+  assert.equal(form.getAttribute("aria-busy"), "true");
+  for (const control of drawer.querySelectorAll("button")) assert.equal(control.disabled, true);
+  assert.equal(app.dispatch(drawer, "cancel").defaultPrevented, true);
+  assert.equal(app.document.querySelectorAll("dialog[open]").length, 1);
+  app.dispatch(form, "submit"); assert.equal(calls, 1);
+  reject({ status: "PARAM_INVALID" }); await settleUsers();
+  assert.equal(form.getAttribute("aria-busy"), "false");
+  assert.equal(input.value, "草稿"); assert.equal(app.context.AppPage.dirty, true);
+  for (const control of drawer.querySelectorAll("button")) assert.equal(control.disabled, false);
+  app.dispatch(drawer, "cancel"); app.enter(app.$('[data-confirm-action="confirm"]')); await result;
+});
+
+test("整页表单返回关闭和路径名称三语可读，语言方向和双主题不被覆盖", async () => {
+  for (const locale of ["zh-CN", "en-US", "ar-SA"]) for (const theme of ["light", "dark"]) {
+    const app = runtime(); app.load("i18n.js"); app.context.I18n.apply({ locale, theme });
+    const result = app.context.UI.formDialog(app.context.I18n.t("edit"), [{ key: "name" }], async () => true);
+    const drawer = app.$("dialog[open]");
+    assert.equal(drawer.querySelector(".form-drawer-back").getAttribute("aria-label"), app.context.I18n.t("back"));
+    assert.equal(drawer.querySelector(".form-drawer-close").getAttribute("aria-label"), app.context.I18n.t("close"));
+    assert.equal(drawer.querySelector("nav").getAttribute("aria-label"), app.context.I18n.t("breadcrumb"));
+    assert.equal(app.document.documentElement.dir, { "zh-CN": "ltr", "en-US": "ltr", "ar-SA": "rtl" }[locale]);
+    assert.equal(app.document.documentElement.dataset.mode, theme);
+    app.dispatch(drawer, "cancel"); await result;
+  }
+});
+
+test("整页样式全视口无窄抽屉，正文单独滚动、底栏保留、RTL与减少动画生效", () => {
+  const css = fs.readFileSync(path.join(assets, "components.css"), "utf8");
+  assert.match(css, /dialog\.form-drawer\[open\]\{[^}]*inset:0;[^}]*inline-size:100%;block-size:100%;max-inline-size:none;max-block-size:none/);
+  assert.match(css, /\.form-drawer-body\{[^}]*min-block-size:0;[^}]*overflow:auto/);
+  assert.match(css, /\.form-drawer-form>\.form-feedback\{flex-shrink:0/);
+  assert.match(css, /html\[dir="rtl"\] \.form-drawer\{--form-drawer-direction:-1\}/);
+  assert.match(css, /translateX\(calc\(100% \* var\(--form-drawer-direction\)\)\)/);
+  assert.match(css, /@media\(prefers-reduced-motion:reduce\)\{dialog\.form-drawer\[open\]\{animation:none\}\}/);
 });
 
 test("确认弹窗安全默认聚焦取消，Enter原生激活取消或确认，Esc取消", async () => {

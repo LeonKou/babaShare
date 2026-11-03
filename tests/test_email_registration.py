@@ -1,6 +1,5 @@
 """邮箱注册隔离测试：临时SQLite、真实HTTP与模拟SMTP，绝不发送外部邮件。"""
 import concurrent.futures
-from contextlib import closing
 import http.client
 import json
 import os
@@ -113,7 +112,7 @@ class EmailRegistrationTests(unittest.TestCase):
         self.assertEqual(self.request("POST", "/visitor/session", {"userName": "USER@example.com", "password": "123456"})[0], 200)
 
     def test_email_registration_and_activation_always_editor_with_scoped_permissions(self):
-        existing = self.service.account({"userName": "existing-viewer", "password": "123456", "role": "viewer"}, actor=self.actor)
+        existing = self.service.account({"userName": "existing-editor", "password": "123456", "role": "editor"}, actor=self.actor)
         before = self.service.repo.user(existing["id"])
         for role in (None, "admin", "viewer"):
             with self.subTest(role=role):
@@ -143,7 +142,7 @@ class EmailRegistrationTests(unittest.TestCase):
                     self.assertEqual((status, error["status"]), (403, "PERMISSION_DENIED"))
                 self.assertEqual(self.client.send_message.call_count, sent)
         self.assertEqual(Service(self.config).repo.user(existing["id"]), before)
-        self.assertEqual(self.service.settings(self.actor), {"registrationEnabled": True, "emailRegistrationEnabled": True})
+        self.assertEqual(self.service.settings(self.actor), {"registrationEnabled": True, "emailRegistrationEnabled": True, "defaultFileCountLimit": 0, "defaultStorageBytesLimit": 0})
 
     def test_activation_mail_multipart_links_validity_and_escaping(self):
         from html.parser import HTMLParser
@@ -499,8 +498,8 @@ class EmailRegistrationTests(unittest.TestCase):
         self.service.account({"userName": "exists@example.com", "password": "123456"}, actor=self.actor)
         stamp = now_ms()
         with self.service.repo.connection() as connection:
-            connection.executemany("INSERT INTO email_activation (id,email_address,nickname,activation_hash,expire_time,create_time,update_time) VALUES (?,?,?,?,?,?,?)",
-                                   [(db_id(new_id()), f"pending{i}@example.com", "pending", digest(str(i)), stamp + 3600000, stamp, stamp) for i in range(1000)])
+            connection.executemany("INSERT INTO email_activation (id,email_address,user_name,nickname,activation_hash,expire_time,create_time,update_time) VALUES (?,?,?,?,?,?,?,?)",
+                                   [(db_id(new_id()), f"pending{i}@example.com", f"pending{i}", "pending", digest(str(i)), stamp + 3600000, stamp, stamp) for i in range(1000)])
         for email, expected in (("new@example.com", "REGISTRATION_THROTTLED"), ("exists@example.com", "USER_EXISTS")):
             self.assertEqual(self.request("POST", "/visitor/email/registration", {"userName": email, "email": email})[1]["status"], expected)
         self.assertEqual(self.client.send_message.call_count, 0)
@@ -532,19 +531,18 @@ class EmailRegistrationTests(unittest.TestCase):
             self.assertTrue(context.check_hostname)
             self.assertEqual(context.verify_mode, 2)
 
-    def test_schema_migration_preserves_existing_settings_and_accounts(self):
+    def test_current_schema_initializes_mail_settings_and_preserves_them_on_reopen(self):
+        from backend.repository import Repository
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "old.sqlite3"
-            with closing(sqlite3.connect(path)) as connection:
-                connection.executescript("CREATE TABLE app_setting (id BLOB PRIMARY KEY,is_registration_enabled INTEGER NOT NULL,create_time BIGINT NOT NULL,update_time BIGINT NOT NULL);")
-                connection.execute("INSERT INTO app_setting VALUES (?,1,1,1)", (b"a" * 16,))
-                connection.commit()
-            from backend.repository import Repository
+            path = Path(directory) / "current.sqlite3"
             repository = Repository(path)
-            row = repository.one("SELECT is_registration_enabled,is_email_registration_enabled,mail_settings FROM app_setting")
-            self.assertEqual(row, {"is_registration_enabled": 1, "is_email_registration_enabled": 0, "mail_settings": "{}"})
-            Repository(path)
-            self.assertEqual(repository.one("SELECT count(*) AS setting_count FROM app_setting")["setting_count"], 1)
+            row = repository.one("SELECT is_registration_enabled,is_email_registration_enabled,registration_revision,mail_settings FROM app_setting")
+            self.assertEqual(row, {"is_registration_enabled": 0, "is_email_registration_enabled": 0, "registration_revision": 0, "mail_settings": "{}"})
+            repository.execute("UPDATE app_setting SET is_registration_enabled=1,is_email_registration_enabled=1,registration_revision=7,mail_settings=? WHERE id IS NOT NULL", ('{"host":"smtp.example.com"}',))
+            before = repository.one("SELECT id,is_registration_enabled,is_email_registration_enabled,registration_revision,mail_settings,create_time,update_time FROM app_setting")
+            reopened = Repository(path)
+            self.assertEqual(reopened.one("SELECT id,is_registration_enabled,is_email_registration_enabled,registration_revision,mail_settings,create_time,update_time FROM app_setting"), before)
+            self.assertEqual(reopened.one("SELECT count(*) AS setting_count FROM app_setting")["setting_count"], 1)
 
     def test_missing_configuration_cannot_enable(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -618,10 +616,12 @@ class EmailRegistrationTests(unittest.TestCase):
             self.assertEqual(raised.exception.status, "REGISTRATION_DISABLED")
             hashing.assert_not_called()
 
-    def test_editor_and_viewer_cannot_read_save_or_test_mail(self):
-        for role in ("editor", "viewer"):
-            user = self.service.account({"userName": role, "password": "123456", "role": role}, actor=self.actor)
+    def test_workspace_roles_cannot_read_save_or_test_mail(self):
+        workspace = self.service.workspace_create(self.actor, {"workspaceName": "邮件权限"})["id"]
+        for role in ("editor", "viewer", "manager"):
+            user = self.service.account({"userName": role, "password": "123456", "role": "editor"}, actor=self.actor)
             actor = self.service.repo.user(user["id"])
+            self.service.member_change(self.actor, {"workspaceId": workspace, "userId": user["id"], "memberRole": role})
             for action in (lambda: self.service.mail_settings(actor), lambda: self.service.mail_settings(actor, {"host": "evil.example.com"}),
                            lambda: self.service.mail_test(actor, {"email": "test@example.com"}), lambda: self.service.settings(actor)):
                 with self.assertRaises(BizError) as raised:
@@ -695,9 +695,9 @@ class EmailRegistrationTests(unittest.TestCase):
         try:
             self.assertEqual(self.request("GET", "/mail-setting/detail", admin=True)[0], 503)
             self.assertEqual(self.request("PATCH", "/setting", {"registrationEnabled": False}, admin=True)[0], 200)
-            self.assertEqual(Service(self.config).settings(self.actor), {"registrationEnabled": False, "emailRegistrationEnabled": True})
+            self.assertEqual(Service(self.config).settings(self.actor), {"registrationEnabled": False, "emailRegistrationEnabled": True, "defaultFileCountLimit": 0, "defaultStorageBytesLimit": 0})
             self.assertEqual(self.request("PATCH", "/setting", {"emailRegistrationEnabled": False}, admin=True)[0], 200)
-            self.assertEqual(Service(self.config).settings(self.actor), {"registrationEnabled": False, "emailRegistrationEnabled": False})
+            self.assertEqual(Service(self.config).settings(self.actor), {"registrationEnabled": False, "emailRegistrationEnabled": False, "defaultFileCountLimit": 0, "defaultStorageBytesLimit": 0})
         finally:
             path.rmdir()
             self.service.smtp_password("private-test-password")
@@ -716,7 +716,7 @@ class EmailRegistrationTests(unittest.TestCase):
                 self.service.settings(self.actor, {"registrationEnabled": False, "emailRegistrationEnabled": False,
                                                    "mailSettings": {"host": "changed.example.com", "password": "replacement"}})
         restarted = Service(self.config)
-        self.assertEqual(restarted.settings(self.actor), {"registrationEnabled": True, "emailRegistrationEnabled": True})
+        self.assertEqual(restarted.settings(self.actor), {"registrationEnabled": True, "emailRegistrationEnabled": True, "defaultFileCountLimit": 0, "defaultStorageBytesLimit": 0})
         self.assertEqual(restarted.mail_config(), before)
         self.assertEqual(restarted.smtp_password(), "private-test-password")
 
@@ -727,16 +727,16 @@ class EmailRegistrationTests(unittest.TestCase):
         invalid = {**self.settings, "host": "changed.example.com", "password": "changed", "activationHours": 721}
         status, result, _ = self.request("PATCH", "/setting", {"registrationEnabled": True, "emailRegistrationEnabled": True, "mailSettings": invalid}, admin=True)
         self.assertEqual((status, result["status"]), (400, "PARAM_INVALID"))
-        self.assertEqual(self.service.settings(self.actor), {"registrationEnabled": False, "emailRegistrationEnabled": False})
+        self.assertEqual(self.service.settings(self.actor), {"registrationEnabled": False, "emailRegistrationEnabled": False, "defaultFileCountLimit": 0, "defaultStorageBytesLimit": 0})
         self.assertEqual(self.service.mail_config(), before)
         self.assertEqual(self.service.smtp_password(), password)
         restarted = Service(self.config)
-        self.assertEqual(restarted.settings(self.actor), {"registrationEnabled": False, "emailRegistrationEnabled": False})
+        self.assertEqual(restarted.settings(self.actor), {"registrationEnabled": False, "emailRegistrationEnabled": False, "defaultFileCountLimit": 0, "defaultStorageBytesLimit": 0})
         self.assertEqual(restarted.mail_config(), before)
         self.assertEqual(restarted.smtp_password(), password)
         valid = {**self.settings, "host": "changed.example.com", "password": "changed", "activationHours": 720}
         status, result, _ = self.request("PATCH", "/setting", {"registrationEnabled": True, "emailRegistrationEnabled": True, "mailSettings": valid}, admin=True)
-        self.assertEqual((status, result), (200, {"registrationEnabled": True, "emailRegistrationEnabled": True}))
+        self.assertEqual((status, result), (200, {"registrationEnabled": True, "emailRegistrationEnabled": True, "defaultFileCountLimit": 0, "defaultStorageBytesLimit": 0}))
         self.assertEqual(self.service.mail_config()["activationHours"], 720)
         self.assertEqual(self.service.smtp_password(), "changed")
         self.assertEqual(self.client.send_message.call_count, 0)
@@ -762,7 +762,7 @@ class EmailRegistrationTests(unittest.TestCase):
         self.assertEqual(self.service.repo.one("SELECT id,is_registration_enabled,is_email_registration_enabled,mail_settings,registration_revision,create_time,update_time FROM app_setting"), before)
         self.assertEqual(self.service.smtp_password(), "private-test-password")
         restarted = Service(self.config)
-        self.assertEqual(restarted.settings(self.actor), {"registrationEnabled": True, "emailRegistrationEnabled": True})
+        self.assertEqual(restarted.settings(self.actor), {"registrationEnabled": True, "emailRegistrationEnabled": True, "defaultFileCountLimit": 0, "defaultStorageBytesLimit": 0})
         self.assertEqual(restarted.smtp_password(), "private-test-password")
 
     def test_combined_submit_empty_password_preserves_and_clear_is_explicit(self):
@@ -943,20 +943,18 @@ class EmailRegistrationTests(unittest.TestCase):
         self.assertEqual(self.request("POST", "/account/email-binding/confirmation", {"token": second_token}, cookie=cookie)[1]["status"], "EMAIL_EXISTS")
         self.assertIsNone(self.service.repo.user(user["id"])["email"])
 
-    def test_legacy_email_account_migration_keeps_name_without_inferred_binding(self):
-        from backend.repository import Repository
+    def test_current_schema_keeps_email_like_account_name_separate_from_binding(self):
+        from backend.repository import Repository, db_id, new_id
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "migration.sqlite3"
-            with closing(sqlite3.connect(path)) as connection:
-                connection.executescript("CREATE TABLE sys_user (id BLOB PRIMARY KEY,user_name TEXT NOT NULL COLLATE NOCASE UNIQUE,nickname TEXT NOT NULL,password_hash TEXT NOT NULL,user_role TEXT NOT NULL,is_disabled INTEGER NOT NULL DEFAULT 0,create_time BIGINT NOT NULL,update_time BIGINT NOT NULL);")
-                connection.execute("INSERT INTO sys_user VALUES (?,?,?,?,?,0,1,1)", (b"a" * 16, "legacy@example.com", "旧成员", "unchanged", "editor"))
-                connection.commit()
+            path = Path(directory) / "current.sqlite3"
             repo = Repository(path)
-            row = repo.user_by_name("legacy@example.com")
+            repo.execute("INSERT INTO sys_user (id,user_name,nickname,password_hash,user_role,create_time,update_time) VALUES (?,?,?,?,?,1,1)",
+                         (db_id(new_id()), "account@example.com", "成员", "unchanged", "editor"))
+            row = repo.user_by_name("account@example.com")
             self.assertIsNone(row["email"])
             self.assertEqual((row["is_email_verified"], row["password_hash"]), (0, "unchanged"))
-            Repository(path)
-            self.assertEqual(repo.user_by_name("legacy@example.com"), row)
+            reopened = Repository(path)
+            self.assertEqual(reopened.user_by_name("account@example.com"), row)
 
     def test_binding_failure_and_logout_never_bind_email(self):
         self.client.send_message.side_effect = OSError("mock failure")

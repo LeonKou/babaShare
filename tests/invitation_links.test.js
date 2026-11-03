@@ -7,13 +7,26 @@ class Element {
     Object.assign(this, { tag, children: [], events: {}, dataset: {}, style: {}, value: "", textContent: "", disabled: false, attrs: {} });
     this.classList = { add() {}, remove() {}, toggle() {} };
   }
-  append(...items) { this.children.push(...items.filter((item) => item != null)); }
+  append(...items) {
+    for (const item of items.filter((item) => item != null)) {
+      this.children.push(item);
+      if (typeof item === "object") item.parentNode = this;
+    }
+  }
+  replaceWith(node) {
+    const parent = this.parentNode;
+    parent.children.splice(parent.children.indexOf(this), 1, node);
+    node.parentNode = parent;
+    this.parentNode = null;
+  }
   prepend(...items) { this.children.unshift(...items); }
   replaceChildren(...items) { this.children = []; this.append(...items); }
   setAttribute(key, value) { this.attrs[key] = String(value); if (["value", "name", "id"].includes(key)) this[key] = value; }
   getAttribute(key) { return this.attrs[key]; }
   removeAttribute(key) { delete this.attrs[key]; }
   addEventListener(key, action) { this.events[key] = action; }
+  removeEventListener(key, action) { if (this.events[key] === action) delete this.events[key]; }
+  contains(node) { return this === node || this.children.some((child) => child?.contains?.(node)); }
   querySelector() { return null; }
   querySelectorAll() { return []; }
   get elements() {

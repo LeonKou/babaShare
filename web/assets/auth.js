@@ -4,6 +4,12 @@
   const inviteToken = UI.invitationToken();
   let mode = "login",
     state = null, busy = false;
+  let maskPassword = () => {}, passwordToggle = null;
+  let clearPasswordInteraction = () => {}, bindPasswordInteraction = () => {};
+  let pageHidden = false, navigating = false;
+  function coverPassword(covered) {
+    $("#auth-product-demo")?.setPasswordCovered?.(covered);
+  }
   const form = $("#auth-form"),
     status = $("#auth-status"),
     logoutFailed = new URL(location.href).searchParams.get("logout") === "failed";
@@ -11,6 +17,12 @@
   settingsControls($("#auth-settings"));
   $("#security-icon").append(UI.icon("shield"));
   function render() {
+    clearPasswordInteraction();
+    clearPasswordInteraction = () => {};
+    bindPasswordInteraction = () => {};
+    maskPassword();
+    maskPassword = () => {};
+    passwordToggle = null;
     const previous = Object.fromEntries(new FormData(form));
     const emailMode = mode === "registration" && state?.emailRegistrationEnabled;
     const title =
@@ -72,6 +84,55 @@
       });
       password.autocomplete =
         mode === "login" ? "current-password" : "new-password";
+      if (mode === "login") {
+        const toggle = el("button", {
+          type: "button",
+          class: "ghost auth-password-toggle",
+          "aria-controls": password.id,
+        });
+        function setVisible(visible) {
+          password.type = visible ? "text" : "password";
+          const key = visible ? "authHidePassword" : "authShowPassword";
+          toggle.setAttribute("data-i18n-label", key);
+          toggle.setAttribute("aria-label", I18n.t(key));
+          toggle.setAttribute("aria-pressed", String(visible));
+          toggle.replaceChildren(UI.icon(visible ? "eyeOff" : "eye"));
+        }
+        const control = el("div", { class: "auth-password-control" });
+        password.replaceWith(control);
+        control.append(password, toggle);
+        passwordToggle = toggle;
+        toggle.disabled = busy;
+        maskPassword = () => setVisible(false);
+        maskPassword();
+        function focusIn() { coverPassword(true); }
+        function focusOut(event) {
+          if (!control.contains(event.relatedTarget)) coverPassword(false);
+        }
+        function toggleVisible() {
+          if (busy) return;
+          toggle.focus();
+          coverPassword(true);
+          setVisible(password.type === "password");
+        }
+        let bound = false;
+        clearPasswordInteraction = () => {
+          control.removeEventListener("focusin", focusIn);
+          control.removeEventListener("focusout", focusOut);
+          toggle.removeEventListener("click", toggleVisible);
+          bound = false;
+          coverPassword(false);
+        };
+        bindPasswordInteraction = () => {
+          if (bound || busy || pageHidden || navigating) return;
+          control.addEventListener("focusin", focusIn);
+          control.addEventListener("focusout", focusOut);
+          toggle.addEventListener("click", toggleVisible);
+          bound = true;
+          coverPassword(control.contains(document.activeElement));
+        };
+        bindPasswordInteraction();
+      }
     }
     for (const [name, value] of Object.entries(previous)) {
       const input = form.elements.namedItem(name);
@@ -111,12 +172,35 @@
       $("#auth-switch").append(el("a", { href: UI.routeUrl("reset-password"), text: I18n.t("forgotPassword") }));
     document.title = `${I18n.t(key)} · babaShare`;
   }
-  I18n.subscribe(render);
+  const unsubscribe = I18n.subscribe(render);
+  function pageHide(event) {
+    pageHidden = true;
+    clearPasswordInteraction();
+    maskPassword();
+    if (!event.persisted) {
+      unsubscribe();
+      window.removeEventListener("pagehide", pageHide);
+      window.removeEventListener("pageshow", pageShow);
+    }
+  }
+  function pageShow() {
+    pageHidden = false;
+    bindPasswordInteraction();
+  }
+  window.addEventListener("pagehide", pageHide);
+  window.addEventListener("pageshow", pageShow);
   I18n.apply(I18n.ctx);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (busy || !state || !validate(form)) return;
+    clearPasswordInteraction();
+    maskPassword();
+    if (busy || !state || pageHidden || navigating) return;
+    if (!validate(form)) {
+      bindPasswordInteraction();
+      return;
+    }
     busy = true;
+    if (passwordToggle) passwordToggle.disabled = true;
     const restoreSubmit = UI.buttonBusy($("#auth-submit"), true);
     $("#auth-switch").inert = true;
     status.classList.remove("error");
@@ -131,6 +215,7 @@
         UI.toast(I18n.t("activationSent"), { kind: "success" });
         return;
       }
+      navigating = true;
       location.href = inviteToken && mode === "login"
         ? UI.invitationUrl("invite", inviteToken) : UI.routeUrl("shell");
     } catch (e) {
@@ -140,10 +225,13 @@
       status.classList.add("error");
       UI.toast(message, { kind: "error" });
     } finally {
+      maskPassword();
       busy = false;
+      if (passwordToggle) passwordToggle.disabled = false;
       restoreSubmit();
       $("#auth-switch").inert = false;
       form.setAttribute("aria-busy", "false");
+      bindPasswordInteraction();
     }
   });
   try {

@@ -10,6 +10,71 @@
     <link rel="stylesheet" href="assets/layout.css" />
     <link rel="stylesheet" href="assets/preview.css" />
     <style>
+      .workspace-operation-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-auto-rows: 1fr;
+        gap: var(--space-2);
+        inline-size: min(100%, 600px);
+        margin-inline-start: auto;
+        margin-block-end: var(--space-4);
+      }
+      .workspace-operation-grid:not(:has(button, summary)) { display: none; }
+      .workspace-action-row {
+        display: grid;
+        grid-column: 1 / -1;
+        grid-template-columns: subgrid;
+        gap: var(--space-2);
+        min-inline-size: 0;
+      }
+      .workspace-action-row:empty { display: none; }
+      /* 每一排不足三项时补齐起始空列，始终与上排的末侧边缘对齐。 */
+      .workspace-action-row > :first-child:nth-last-child(2) { grid-column: 2; }
+      .workspace-action-row > :only-child { grid-column: 3; }
+      .page:has(#workspace-picker:not([hidden])) .workspace-operation-grid {
+        margin-inline-start: 0;
+        margin-inline-end: auto;
+      }
+      .page:has(#workspace-picker:not([hidden])) .workspace-action-row > :only-child { grid-column: 1; }
+      .workspace-heading { display: flex; flex-direction: row; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
+      .workspace-heading > div { min-inline-size: 0; flex: 1; overflow-wrap: anywhere; }
+      .workspace-heading #file-search { margin: 0; margin-inline-start: auto; flex: 0 1 320px; align-self: flex-start; }
+      .workspace-heading #file-search input { inline-size: 100%; flex: 1; }
+      .page:has(#workspace-picker:not([hidden])) #file-search { display: none; }
+      @media (max-width: 600px) {
+        .workspace-heading { flex-wrap: wrap; }
+        .workspace-heading #file-search { flex-basis: 100%; }
+      }
+      .workspace-action-row > button,
+      .workspace-action-row > .upload-menu,
+      .workspace-action-row > .upload-menu > summary {
+        inline-size: 100%;
+        min-inline-size: 0;
+        min-block-size: 40px;
+        block-size: 100%;
+        margin: 0;
+      }
+      .workspace-action-row > button,
+      .workspace-action-row > .upload-menu > summary {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: var(--space-2);
+        padding: var(--space-2) var(--space-3);
+        white-space: normal;
+        overflow-wrap: anywhere;
+        text-align: center;
+      }
+      .workspace-action-row .icon { flex-shrink: 0; }
+      #file-search { min-inline-size: 0; max-inline-size: 100%; }
+      #file-search input { min-inline-size: 0; }
+      @media (max-width: 420px) {
+        .workspace-operation-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .workspace-action-row { grid-auto-rows: 1fr; }
+        .workspace-action-row > :first-child:nth-last-child(2) { grid-column: auto; }
+        .workspace-action-row > :only-child { grid-column: 2; }
+        #workspace-head-actions > :first-child:nth-last-child(3) { grid-column: 2; }
+      }
       .upload-menu > summary.primary {
         background: var(--color-primary);
         border-color: var(--color-primary);
@@ -87,7 +152,7 @@
             <li aria-current="page" data-i18n="workspaces">工作区</li>
           </ol>
         </nav>
-        <header class="page-head">
+        <header class="page-head workspace-heading">
           <div>
             <div class="files-heading">
               <h1 id="workspace-title" data-i18n="workspaces">工作区</h1>
@@ -101,25 +166,20 @@
               为设计与协作创建一个专属空间。
             </p>
           </div>
-          <div class="actions" id="workspace-head-actions"></div>
+          <form id="file-search" class="search">
+            <label class="sr-only" for="search-input" data-i18n="search">搜索文件名</label>
+            <input type="search" id="search-input" data-i18n-placeholder="search" placeholder="搜索文件名" />
+            <button type="submit" data-i18n="searchButton">搜索</button>
+          </form>
         </header>
+        <div class="workspace-operation-grid" role="group" aria-label="操作" data-i18n-label="actions">
+          <div class="workspace-action-row" id="workspace-head-actions" role="group" aria-label="工作区" data-i18n-label="workspace"></div>
+          <div class="workspace-action-row" id="file-actions" role="group" aria-label="文件列表" data-i18n-label="fileList"></div>
+        </div>
         <section id="workspace-picker" hidden>
           <div class="cards" id="workspace-cards"></div>
         </section>
         <section id="file-browser" hidden>
-          <div class="toolbar">
-            <form id="file-search" class="search">
-              <label class="sr-only" for="search-input" data-i18n="search"
-                >搜索文件名</label
-              ><input
-                type="search"
-                id="search-input"
-                data-i18n-placeholder="search"
-                placeholder="搜索文件名"
-              /><button type="submit" data-i18n="searchButton">搜索</button>
-            </form>
-            <div class="actions" id="file-actions"></div>
-          </div>
           <div class="pagination" id="file-pagination"></div>
           <div
             id="file-status"
@@ -176,6 +236,7 @@
             </table>
           </div>
           <div id="file-empty" hidden></div>
+          <div id="personal-quota" class="section" role="status" aria-live="polite"></div>
           <div class="upload-zone" id="drop-zone">
             <span id="drop-icon"></span
             ><span data-i18n="uploadHint"

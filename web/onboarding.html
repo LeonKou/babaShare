@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN" dir="ltr" data-mode="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>babaShare · 新手任务</title>
+    <script src="assets/boot.js"></script>
+    <link rel="stylesheet" href="assets/tokens.css" />
+    <link rel="stylesheet" href="assets/components.css" />
+    <link rel="stylesheet" href="assets/layout.css" />
+    <link rel="stylesheet" href="assets/onboarding.css" />
+    <link rel="stylesheet" href="assets/onboarding-celebration.css" />
+  </head>
+  <body>
+    <main class="page onboarding-page">
+      <nav class="crumbs" aria-label="面包屑" data-i18n-label="breadcrumb"><ol><li><a href="index.html" data-i18n="home">首页</a></li><li aria-current="page" data-i18n="onboarding">新手任务</li></ol></nav>
+      <header class="page-head"><div><h1 data-i18n="onboarding">新手任务</h1><p class="muted" data-i18n="onboardingIntro">六个小步骤，让你的第一个作品启航。</p></div></header>
+      <div id="onboarding-status" class="status-line" role="status" aria-live="polite"></div>
+      <section id="onboarding-content" hidden></section>
+      <div id="onboarding-retry" class="actions"></div>
+    </main>
+    <div id="global-toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="assets/i18n.js"></script>
+    <script src="assets/bridge-core.js"></script>
+    <script src="assets/page-bridge.js"></script>
+    <script src="assets/common.js"></script>
+    <script src="assets/api.js"></script>
+    <script src="assets/onboarding-celebration.js"></script>
+    <script src="assets/onboarding.js"></script>
+  </body>
+</html>

@@ -5,8 +5,8 @@
 ## 1. 服务地址与个人密钥
 
 1. 打开 babaShare 的 `/baba-share/` 页面，登录后进入「个人中心」。
-2. 创建 MCP Key：名称 1–100 字符，有效期可选预设、自定义 1–87600 整数小时或永久。每个账户最多有 10 个未撤销且未过期的有效密钥。
-3. 新创建的密钥使用受保护主密钥派生，服务端只保存摘要与派生标记；列表不会返回明文。本人登录后可点击每条有效密钥的「复制使用」恢复并复制一次性配置说明。旧密钥只有摘要，返回 MCP_KEY_NOT_RECOVERABLE，请重新创建；旧密钥不会自动撤销。
+2. 创建 MCP Key：名称 1–100 字符，有效期可选预设、自定义 1–87600 整数小时或永久。每个账户最多有 10 个未过期的有效密钥。
+3. 密钥统一使用受保护主密钥派生，服务端保存摘要与完整派生元数据；列表不会返回明文。本人登录后可点击每条有效密钥的「复制使用」恢复并复制一次性配置说明。派生元数据损坏或主密钥异常时拒绝恢复，不生成替代密钥。
 4. 个人中心不再提供独立安装说明区；点击「复制使用」会使用当前浏览器 `window.location.origin`（包含实际协议、域名及非默认端口）动态生成 MCP 地址。
 
 本文使用 `<SERVICE_ORIGIN>` 占位符，表示你实际打开服务时的 origin，不包含 `/baba-share/` 等路径，也不含结尾 `/`。MCP 地址为：
@@ -22,7 +22,7 @@
 - MCP Key 是 Bearer 凭据：持有者可以以你的身份调用你已有权限内的 MCP 工具。不要存进源码、配置明文、URL、日志、提交记录或公开聊天。
 - 「复制使用」说明包含完整密钥，仅在你明确授权的前提下交给可信 AI 客户端；客户端应将密钥安全持久化到自己的私密环境文件或用户环境变量（Codex 支持 `bearer_token_env_var`），不得写入源码、项目 `.env`、URL、日志、shell 历史、提交或公开文件。页面不会修改本机 Codex 配置。
 - 环境变量仍可被拥有相同用户权限的进程读取；在可信机器及可信客户端上使用。完成复制后清理剪贴板，怀疑泄露时立即在个人中心删除。
-- 删除立即影响后续请求，物理移除记录及恢复信息且无法恢复；永久密钥也应定期检查与轮换。历史已撤销记录仅在用户主动删除时移除。
+- 删除立即影响后续请求，物理移除记录及恢复信息且无法恢复；永久密钥也应定期检查与轮换。
 
 ## 2. Windows PowerShell
 
@@ -121,7 +121,7 @@ OpenCode 官方远程 MCP 配置使用 `type: "remote"`、`url`、`enabled: true
 - 客户端必须支持远程 HTTP Bearer 鉴权。该端点只使用 MCP Bearer 身份；网页登录 Cookie 或 OAuth 不能代替 MCP Key。
 - 当前服务使用无会话 Streamable HTTP JSON-RPC，响应为 `application/json`；支持协议版本 `2025-03-26`、`2025-06-18`、`2025-11-25`，不要求长期 SSE 连接。
 
-只读验证顺序：客户端执行 `initialize` → `notifications/initialized` → `tools/list`（确认 19 个工具）→ `workspace_list {}`。不要通过新建、修改或删除工作区来测试。成功结果包含 `content` 文本及 `structuredContent.items` 数组，空数组也表示验证成功。业务错误在 `result.isError=true` 中返回；协议错误使用 JSON-RPC `error`。
+只读验证顺序：客户端执行 `initialize` → `notifications/initialized` → `tools/list`（确认包含 `directory_tree`）→ `directory_tree {}`。不要通过新建、修改或删除工作区来测试。成功结果包含 `content` 文本及 `structuredContent` 对象；目录树的 `complete=true` 且 `nodes=[]` 表示当前没有可访问工作区，也属于成功。业务错误在 `result.isError=true` 中返回；协议错误使用 JSON-RPC `error`。
 
 ## 7. 远程 HTTPS 部署
 
@@ -142,20 +142,32 @@ BABA_SHARE_SECURE_COOKIE=1
 
 ## 8. MCP 权限与工具
 
-MCP 使用密钥所属用户的实时角色、禁用状态及工作区/内容权限；密钥本身不增加权限。管理员沿用现有可管理全部工作区的权限，所有者/成员沿用现有访问和内容归属规则，只读用户不能写入或创建分享。MCP 不暴露密钥、会话、用户账户或安全设置管理。
+MCP 使用密钥所属用户的实时角色、禁用状态及工作区/内容权限；密钥本身不增加权限。全局角色为 `admin`/`editor`，工作区成员角色为 `viewer`/`editor`/`manager`。全局管理员可管理全部工作区；所有者视为该工作区管理者；工作区查看者不可写入；编辑者可在他人目录下新增属于自己的内容，但不能修改或删除他人内容；管理者可管理该工作区内容。创建仍执行共享 Service 的个人配额、路径安全、同名策略与幂等校验。MCP 不暴露密钥、会话、用户账户或安全设置管理。
+
+### 先展示目录树，再确认目标
+
+1. `initialize` 在 `_meta["babashare/directoryTree"]` 返回当前用户全部可访问工作区与纯文件夹快照，包含空工作区根和空目录；不列文件、不读取文件内容。
+2. `_meta` 可能被客户端忽略，所以创建文件夹、写文件或上传前必须调用标准工具 `directory_tree {}` 获取完整树。不得用 `node_list` 的分页结果冒充完整目录树。
+3. 客户端有原生树选择界面时，优先展开树让用户点选；没有时，以树形编号和 `displayPath` 全路径标签展示选项并请求用户确认，不要求手输目标路径，也不默认选择工作区根。服务目前是无会话单 POST JSON 协议，没有提供 elicitation 双向请求或 MCP Apps 界面；本说明不保证任何客户端已经具备树形 UI。
+4. 快照返回 `complete`、`treeVersion`、`treeToken`、`expireTime`（UTC 毫秒）和 `nodes`。节点含 `targetId`、`nodeId`、`nodeType`、`workspaceId`、`parentId`、`name`、`path`、`displayPath`、`memberRole`、`canCreateChild`。工作区根的 `nodeType="workspaceRoot"`、`nodeId=null`、`targetId="workspace:<工作区UUID>"`，不是伪造的数据库目录；文件夹 `targetId`/`nodeId` 是真实目录 UUID。`parentId` 指向父节点的 `targetId`。
+5. 三个创建工具必须携带快照 `treeToken` 和用户选定的 `targetId`；`relativePath` 或 `files[].path` 仅为所选节点之内的相对名称，可以保留上传子目录但不可越界。旧 `workspaceId+path` 参数不能绕过选择校验。`canCreateChild` 表示可在目录中新建，不等同于可修改该目录或其他人的文件。
+6. 凭证为固定长度的随机快照 ID 加用户绑定 HMAC，不携带完整目录树；完整树版本与目录路径保存在进程内快照中，不持久化秘密。快照缓存上限为 128 条和 8 MiB 编码数据，按 LRU 淘汰并清理过期项；五分钟后、被淘汰或服务实例重建后凭证失效。每次创建都重新检查账号、空间、目录 ID、路径、名称及权限；移动、删除、撤权等变化返回 `MCP_TREE_REFRESH_REQUIRED`，必须刷新并重新确认，不会悄悄写入移动后的新位置。凭证仅证明选择来自该用户的树快照，不能证明人类实际点击过。
+7. 完整工具响应预算为 2 MiB 与 `max_body_bytes / 2` 中较小值（含双份文本/结构化结果、转义和协议预留）；超限不写入快照缓存。完整响应超出预算或目录元数据不完整时返回 `complete=false`、明确 `reason`、空节点和空凭证；不静默截断、不允许用不完整树创建。`workspace_create` 后也必须刷新树再选择。
+8. 目标解析和实际写入持有同根 Service 的共享 RLock，防止同进程内选择验证与写入之间移动目录或撤权；保留原有上传事务。该锁不提供跨独立进程保证，运行时单实例锁应保持启用，不支持绕过运行时锁后多个进程共同写同一数据目录。
 
 下列签名中 `?` 表示可选；`string` 为字符串，`integer` 为整数，`boolean` 为布尔值。仅接受已声明参数，不接受额外字段。
 
 ```text
 workspace_list({})
+directory_tree({})
 workspace_create({workspaceName: string, description?: string})
 workspace_change({id: string, workspaceName?: string, description?: string})
 workspace_delete({id: string})
 node_list({workspaceId: string, path?: string, pageIndex?: integer, pageSize?: integer, search?: string, sort?: "name"|"size"|"updateTime", order?: "asc"|"desc"})
-folder_create({workspaceId: string, path: string})
+folder_create({treeToken: string, targetId: string, relativePath: string})
 file_read({workspaceId: string, path: string})
-file_write({workspaceId: string, path: string, content: string})
-file_upload({workspaceId: string, path?: string, conflictPolicy?: "ask"|"overwrite"|"rename", requestId?: string, files: [{path: string, contentBase64: string}]})
+file_write({treeToken: string, targetId: string, relativePath: string, content: string})
+file_upload({treeToken: string, targetId: string, conflictPolicy?: "ask"|"overwrite"|"rename", requestId?: string, files: [{path: string, contentBase64: string}]})
 file_move({workspaceId: string, path: string, newPath: string})
 folder_move({workspaceId: string, path: string, newPath: string})
 file_delete({workspaceId: string, path: string})
@@ -164,21 +176,23 @@ share_list({})
 share_create({workspaceId: string, path?: string, expireHours?: integer})
 share_revoke({id: string})
 member_list({workspaceId: string})
-member_change({workspaceId: string, userId?: string, userName?: string, collaborate?: boolean})
+member_change({workspaceId: string, userId?: string, userName?: string, memberRole?: "viewer"|"editor"|"manager"})
 member_delete({workspaceId: string, userId: string})
 ```
 
-- 文件/目录路径均为工作区内相对路径，空目录路径表示根目录；不得传绝对路径或 `..` 越界路径。
-- `node_list` 默认 `path=""`、`sort="name"`、`order="asc"`，分页从 1 开始。
+- 读取、列举、移动、删除和分享工具的路径相对工作区，空目录路径表示根目录；三个创建工具的相对名称以选中的目录为基准，工作区根也必须显式选择。不得传绝对路径或 `..` 越界路径。
+- `node_list` 默认 `path=""`、`sort="name"`、`order="asc"`，分页从 1 开始。成功调用会为普通用户记录「进入工作区」新手任务，因此该工具不宣称完全只读；仅获取 `directory_tree` 不计完成。
+- 网页与 MCP 使用同一账户的新手进度，当前六项为进入工作区、创建文件夹、上传文件、成功预览、创建 MCP Key、通过 MCP 成功交互一次。网页文件统一上传，不提供单独新建 HTML 入口；编辑或重命名不再是新手任务。
+- 在个人中心成功创建密钥计入创建 MCP Key；使用该账户密钥成功执行一次 MCP 工具调用（例如 `directory_tree`）计入 MCP 交互。仅连接、`initialize`、`tools/list`、业务失败、待确认未执行或回滚不计入。`file_upload` 成功可同时完成上传任务，`file_write` 不作为上传；读取文件、生成链接或获取目录树不等于成功预览，预览任务需在网页真实加载后回执确认。MCP 不提供直接勾选任务或伪造彩蛋解锁的工具。
 - `file_read` 读取 UTF-8 文本；`file_write` 写入 UTF-8 文本并按现有权限处理覆盖。
 - `file_upload` 每次接受 1–500 个文件，使用标准 Base64，保留相对资源路径。大项目应按实际请求体限制分批；Base64 会使体积增大。
 - `share_create.expireHours` 默认 `0` 表示永久；注意它与**密钥管理**中永久为 `null` 的约定不同。
-- `member_change` 必须提供 `userId` 或 `userName`，`collaborate` 默认 `false`。
+- `member_change` 必须提供 `userId` 或 `userName`，`memberRole` 默认为 `viewer`；仅工作区管理者可修改成员。
 - 调用 `workspace_delete`、文件/文件夹移动或删除、`share_revoke`、`member_delete` 等破坏性操作前先向用户确认，不把安装说明视为执行授权。
 
 ### 同名冲突策略（HTTP 与 MCP 一致）
 
-`POST /api/baba-share/core/v1/file/upload` 的 JSON body 与 `file_upload` 参数相同。
+`POST /api/baba-share/core/v1/file/upload` 仍使用网页的 `workspaceId`、`path` 定位；MCP `file_upload` 使用 `treeToken`、`targetId` 选择定位，两者的 `files`、`conflictPolicy`、`requestId` 及后续共享 Service 处理保持一致。
 
 - `conflictPolicy` 默认为 `ask`：任何同名文件使整批暂停，返回 HTTP 200 业务预检结果 `requiresConfirmation=true`、`conflicts:[{path}]`、`count=0`、`files=[]`；目录、文件和元数据均不写入。MCP 的 `isError=false` 不代表已上传，客户端必须检查 `requiresConfirmation`。
 - `overwrite`：明确授权本次调用的全部同名文件始终覆盖；未冲突文件正常新增。网页也可勾选“此页面后续上传始终覆盖”，切换工作区或刷新重置，仍检查权限，不影响服务端默认值。上传开始时冻结目标和策略，中途切换不会改变本批。取消或待确认保留文件选择，不提示上传成功。
@@ -207,14 +221,14 @@ prototype/
 
 给 Codex 的操作要求可以是：
 
-> 使用 baba-share 的 workspace_list 选择我指定的工作区；未经确认不要创建或删除工作区。读取本地 prototype 目录的文件，保留其相对路径，使用 file_upload 上传到 demos/my-prototype。对二进制文件按原始字节进行标准 Base64 编码。先列出将覆盖的目标文件并请求确认，再执行可能覆盖的上传。不要上传 .env、密钥、版本控制目录或其他未授权文件，不要执行上传内容。
+> 先调用 baba-share 的 directory_tree，展示完整工作区和文件夹树；有原生树选择界面就展开让我点选，没有则给我树形编号及全路径标签选项确认，不让我手输目标路径。未经确认不要创建或删除工作区。读取本地 prototype 目录的文件，保留其相对路径，用选中节点的 treeToken 和 targetId 调用 file_upload。对二进制文件按原始字节进行标准 Base64 编码。先列出将覆盖的目标文件并请求确认，再执行可能覆盖的上传。不要上传 .env、密钥、版本控制目录或其他未授权文件，不要执行上传内容。
 
 工具调用参数结构（编码占位符必须替换为实际文件字节的 Base64，不可照字面发送）：
 
 ```json
 {
-  "workspaceId": "<WORKSPACE_ID>",
-  "path": "demos/my-prototype",
+  "treeToken": "<DIRECTORY_TREE_TOKEN>",
+  "targetId": "<USER_SELECTED_TARGET_ID>",
   "files": [
     { "path": "index.html", "contentBase64": "<BASE64_OF_INDEX_HTML_BYTES>" },
     { "path": "css/site.css", "contentBase64": "<BASE64_OF_SITE_CSS_BYTES>" },
@@ -224,7 +238,7 @@ prototype/
 }
 ```
 
-上传后用 `node_list` 检查 `demos/my-prototype` 及子目录，并通过页面预览验证资源引用；需要分享时再明确请求 `share_create`。
+上传后用 `node_list` 检查所选工作区、目录路径及上传子目录，并通过页面预览验证资源引用；需要分享时再明确请求 `share_create`。目录树不展示文件，不能用它检查文件上传结果。
 
 ## 9. 密钥管理 HTTP API（只供网页登录会话）
 
@@ -236,7 +250,7 @@ prototype/
 GET /api/baba-share/core/v1/mcp-key/list
 ```
 
-返回元数据数组，包含 `id`、`keyName`、`keyPrefix`、`createTime`、`updateTime`、`expireTime`、`revokedTime`、`isActive`。时间为 UTC 毫秒，永久的 `expireTime=null`，未撤销时 `revokedTime=null`。不返回明文或摘要。列表包含有效、过期及已撤销记录。
+返回元数据数组，包含 `id`、`keyName`、`keyPrefix`、`createTime`、`updateTime`、`expireTime`、`isActive`。时间为 UTC 毫秒，永久的 `expireTime=null`。不返回明文或摘要。列表只包含当前存在的有效或过期密钥，删除记录不再返回。
 
 ### 创建
 
@@ -266,9 +280,9 @@ Content-Type: application/json
 {"id":"<KEY_ID>"}
 ```
 
-仅接受当前用户有效 Cookie，并应用与其他浏览器 API 相同的来源防护：拒绝 `Origin: null` 和明确的跨站浏览器请求，不将 Origin/Host 与 `PUBLIC_ORIGIN` 绑定；MCP Bearer 不能调用。返回 `{ "key": "<FULL_KEY>" }`，带 `Cache-Control: no-store`，不在日志中记录。敏感内容不通过 GET、URL、列表或桥接通信返回；该 POST 只读取凭据，不生成新密钥。跨用户返回 `404 MCP_KEY_NOT_EXIST`；撤销或过期返回 `409 MCP_KEY_INACTIVE`；旧密钥无派生标记返回 `409 MCP_KEY_NOT_RECOVERABLE`。不会自动撤销或轮换。
+仅接受当前用户有效 Cookie，并应用与其他浏览器 API 相同的来源防护：拒绝 `Origin: null` 和明确的跨站浏览器请求，不将 Origin/Host 与 `PUBLIC_ORIGIN` 绑定；MCP Bearer 不能调用。返回 `{ "key": "<FULL_KEY>" }`，带 `Cache-Control: no-store`，不在日志中记录。敏感内容不通过 GET、URL、列表或桥接通信返回；该 POST 只读取凭据，不生成新密钥。跨用户返回 `404 MCP_KEY_NOT_EXIST`；撤销或过期返回 `409 MCP_KEY_INACTIVE`；派生元数据无效或主密钥异常返回 `503 MCP_KEY_RECOVERY_UNAVAILABLE`。不会自动撤销或轮换。
 
-主密钥 `<DATA_DIR>/data/mcp-key-master` 是随机 32 字节，以排他创建方式生成（POSIX 0600），仅首次真正创建新密钥时生成。拒绝符号链接、不安全权限、读取失败及错误长度。已有派生密钥时主密钥缺失不会重建；每次恢复还以 `key_hash` 验证结果，丢失或替换 master 返回 `503 MCP_KEY_RECOVERY_UNAVAILABLE`，绝不返回错误凭据。完整备份和迁移必须同时保护数据库、filedb 与该 master；master 泄露等价于可恢复数据库中全部新密钥。启动自动添加可空派生列，旧密钥仍可用于鉴权但不可恢复。
+主密钥 `<DATA_DIR>/data/mcp-key-master` 是随机 32 字节，以排他创建方式生成（POSIX 0600），仅首次真正创建新密钥时生成。拒绝符号链接、不安全权限、读取失败及错误长度。已有派生密钥时主密钥缺失不会重建；每次恢复还以 `key_hash` 验证结果，丢失或替换 master 返回 `503 MCP_KEY_RECOVERY_UNAVAILABLE`，绝不返回错误凭据。保存或恢复运行数据时必须同时保护数据库、filedb 与该 master；master 泄露等价于可恢复数据库中全部密钥。数据库从首次初始化起直接包含必填派生元数据，启动不补列、不转换密钥模型。
 
 ### 删除
 
@@ -291,5 +305,5 @@ DELETE /api/baba-share/core/v1/mcp-key?id=<KEY_ID>
 
 ## 11. 密钥恢复常见问题
 
-- **创建请求超时**：使用相同 requestId 重试并刷新列表；若服务器已经创建新密钥，点击该卡片「复制使用」即可。历史密钥返回 `MCP_KEY_NOT_RECOVERABLE` 时请主动另建；不会自动撤销历史密钥。
-- **恢复不可用**：正确恢复对应 `data/mcp-key-master` 备份，不要删除或换成随机新文件；旧的摘要鉴权与现有密钥状态不受恢复失败影响。
+- **创建请求超时**：使用相同 requestId 重试并刷新列表；若服务器已经创建密钥，点击该卡片「复制使用」即可。
+- **恢复不可用**：核对对应 `data/mcp-key-master` 及派生元数据，不要删除主密钥或换成随机新文件；系统拒绝返回无法验证的凭据，也不会自动撤销或轮换密钥。

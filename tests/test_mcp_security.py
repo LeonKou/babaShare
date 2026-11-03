@@ -79,7 +79,9 @@ for (const [locale, marker] of Object.entries(markers)) {
     assert(text.includes('~/.codex/config.toml'));
     assert(text.includes('0600'));
     assert(text.includes('initialize → notifications/initialized → tools/list'));
-    assert(text.includes('workspace_list {}'));
+    assert(text.includes('directory_tree {}'));
+    assert(text.includes('treeToken'));
+    assert(text.includes('targetId'));
     assert(text.includes('PERMISSION_DENIED'));
     assert(text.includes('FOREIGN_CONTENT'));
     assert(!text.includes('mcp debug'));
@@ -89,8 +91,8 @@ for (const [locale, marker] of Object.entries(markers)) {
     const json = JSON.parse(text.match(/```json\n([\s\S]*?)\n```/)[1]);
     assert.equal(json.mcp['baba-share'].url, origin + '/api/baba-share/core/v1/mcp');
     assert(!JSON.stringify(json).includes(input.secret));
-    const tools = text.match(/workspace_list, workspace_create[\s\S]*?member_delete/)[0].match(/\b(?:workspace|node|folder|file|share|member)_\w+\b/g);
-    assert.equal(new Set(tools).size, 19);
+    const tools = text.match(/directory_tree, workspace_list, workspace_create[\s\S]*?member_delete/)[0].match(/\b(?:directory|workspace|node|folder|file|share|member)_\w+\b/g);
+    assert.equal(new Set(tools).size, 20);
   }
 }
 assert.equal(warnings.length, 0);
@@ -149,31 +151,43 @@ process.stdout.write('ok');
                     self.assert_biz_error(400, self.create, **{field: value})
         self.assertEqual(self.service.mcp_keys(self.admin), [])
 
-    def test_expiry_revocation_and_missing_or_disabled_account_are_rechecked(self):
+    def test_expiry_deletion_and_missing_or_disabled_account_are_rechecked(self):
         expired = self.create(expireHours=1)
         self.service.repo.execute("UPDATE auth_mcp_key SET expire_time=? WHERE id=?", (now_ms() - 1, db_id(expired["id"])))
         self.assert_biz_error(401, self.service.mcp_authenticated, expired["key"])
         self.assertFalse(self.service.mcp_keys(self.admin)[0]["isActive"])
-        revoked = self.create()
-        self.service.mcp_key_delete(self.admin, revoked["id"])
-        self.service.mcp_key_delete(self.admin, revoked["id"])
-        self.assert_biz_error(401, self.service.mcp_authenticated, revoked["key"])
+        deleted = self.create()
+        self.service.mcp_key_delete(self.admin, deleted["id"])
+        self.service.mcp_key_delete(self.admin, deleted["id"])
+        self.assert_biz_error(401, self.service.mcp_authenticated, deleted["key"])
         live = self.create()
         self.service.repo.execute("UPDATE sys_user SET is_disabled=1 WHERE id=?", (db_id(self.admin["id"]),))
         self.assert_biz_error(401, self.service.mcp_authenticated, live["key"])
-        self.service.repo.execute("UPDATE sys_user SET is_disabled=0,user_role='viewer' WHERE id=?", (db_id(self.admin["id"]),))
-        self.assertEqual(self.service.mcp_authenticated(live["key"])["user_role"], "viewer")
+        self.service.repo.execute("UPDATE sys_user SET is_disabled=0,user_role='editor' WHERE id=?", (db_id(self.admin["id"]),))
+        self.assertEqual(self.service.mcp_authenticated(live["key"])["user_role"], "editor")
         self.service.repo.execute("DELETE FROM sys_user WHERE id=?", (db_id(self.admin["id"]),))
         self.assert_biz_error(401, self.service.mcp_authenticated, live["key"])
 
     def test_other_user_cannot_list_or_revoke_keys(self):
-        account = self.service.account({"userName": "qa-peer", "password": "qa-isolated-password-123", "role": "viewer"}, actor=self.admin)
+        account = self.service.account({"userName": "qa-peer", "password": "qa-isolated-password-123", "role": "editor"}, actor=self.admin)
         peer = self.service.repo.user(account["id"])
         created = self.create()
         self.assertEqual(self.service.mcp_keys(peer), [])
         self.assert_biz_error(404, self.service.mcp_key_delete, peer, created["id"])
         self.assertEqual(self.service.mcp_authenticated(created["key"])["id"], self.admin["id"])
         self.assertRegex(self.create(user=peer)["key"], r"^bsk-")
+
+    def test_bearer_rejects_invalid_derivation_metadata_without_reading_master(self):
+        created = self.create()
+        row = self.service.repo.one("SELECT user_id,key_hash,mcp_derivation_version,mcp_derivation_nonce FROM auth_mcp_key WHERE id=?", (db_id(created["id"]),))
+        with mock.patch.object(self.service, "mcp_master", side_effect=AssertionError("Bearer不应读取主密钥")):
+            self.assertEqual(self.service.mcp_authenticated(created["key"])["id"], self.admin["id"])
+            for changes in ({"mcp_derivation_version": None}, {"mcp_derivation_nonce": None},
+                            {"mcp_derivation_version": "unsupported"}, {"mcp_derivation_nonce": "A" * 64},
+                            {"mcp_derivation_nonce": "g" * 64}, {"key_hash": None},
+                            {"key_hash": "invalid"}, {"key_hash": "0" * 64}):
+                with self.subTest(changes=changes), mock.patch.object(self.service.repo, "one", return_value={**row, **changes}):
+                    self.assert_biz_error(401, self.service.mcp_authenticated, created["key"])
 
     def test_malformed_or_session_tokens_are_not_mcp_credentials(self):
         for token in (None, "", "bsk-" + "x" * 42, "bsk-" + "x" * 44, "bsk-" + "/" * 43, self.service.new_session(self.admin["id"])):
@@ -224,7 +238,7 @@ class McpHttpSecurityTests(unittest.TestCase):
         cls.users, cls.cookies, cls.keys = {}, {}, {}
         admin = cls.service.account({"userName": "qa-admin", "password": "qa-isolated-password-123"}, "setup")
         cls.users["admin"] = cls.service.repo.user(admin["id"])
-        for actor, role in (("owner", "editor"), ("peer", "editor"), ("viewer", "viewer")):
+        for actor, role in (("owner", "editor"), ("peer", "editor"), ("viewer", "editor")):
             user = cls.service.account({"userName": "qa-" + actor, "password": "qa-isolated-password-123", "role": role}, actor=cls.users["admin"])
             cls.users[actor] = cls.service.repo.user(user["id"])
         for actor, user in cls.users.items():
@@ -259,10 +273,20 @@ class McpHttpSecurityTests(unittest.TestCase):
 
     def setUp(self):
         self.workspace = self.service.workspace_create(self.users["owner"], {"workspaceName": "qa-" + secrets.token_hex(12)})["id"]
-        for actor in ("peer", "viewer"):
-            self.service.member_change(self.users["owner"], {"workspaceId": self.workspace, "userId": self.users[actor]["id"], "collaborate": actor == "viewer"})
+        for actor, member_role in (("peer", "editor"), ("viewer", "viewer")):
+            self.service.member_change(self.users["owner"], {"workspaceId": self.workspace, "userId": self.users[actor]["id"], "memberRole": member_role})
 
     def call(self, name, arguments, actor="peer"):
+        arguments = dict(arguments)
+        if name in ("folder_create", "file_write", "file_upload") and "workspaceId" in arguments:
+            workspace_id = arguments.pop("workspaceId")
+            path = arguments.pop("path", "")
+            snapshot = self.call("directory_tree", {}, actor)[1]["result"]["structuredContent"]
+            target_path = path if name == "file_upload" else ""
+            target = next(node for node in snapshot["nodes"] if node["workspaceId"] == workspace_id and node["path"] == target_path)
+            arguments.update(treeToken=snapshot["treeToken"], targetId=target["targetId"])
+            if name != "file_upload":
+                arguments["relativePath"] = path
         return self.request({"jsonrpc": "2.0", "id": "qa-call", "method": "tools/call", "params": {"name": name, "arguments": arguments}}, actor=actor)
 
     def test_bearer_without_origin_is_allowed_but_cookie_cannot_authenticate_mcp(self):
@@ -361,6 +385,7 @@ class McpHttpSecurityTests(unittest.TestCase):
             return response["result"]["structuredContent"]
 
         workspace = success("workspace_create", {"workspaceName": "qa-tools-" + secrets.token_hex(8)})["id"]
+        self.assertTrue(success("directory_tree")["complete"])
         self.assertIn(workspace, {item["id"] for item in success("workspace_list")["items"]})
         success("workspace_change", {"id": workspace, "workspaceName": "qa-renamed-" + secrets.token_hex(8), "description": "全部参数映射"})
         success("folder_create", {"workspaceId": workspace, "path": "site/assets"})
@@ -381,7 +406,7 @@ class McpHttpSecurityTests(unittest.TestCase):
         success("member_change", {"workspaceId": workspace, "userName": self.users["peer"]["user_name"]})
         roster = success("member_list", {"workspaceId": workspace})
         self.assertIn(self.users["peer"]["id"], {item["userId"] for item in roster["items"]})
-        success("member_change", {"workspaceId": workspace, "userId": self.users["peer"]["id"], "collaborate": True})
+        success("member_change", {"workspaceId": workspace, "userId": self.users["peer"]["id"], "memberRole": "manager"})
         success("member_delete", {"workspaceId": workspace, "userId": self.users["peer"]["id"]})
         success("share_revoke", {"id": share["id"]})
         self.assertNotIn(share["id"], {item["id"] for item in success("share_list")["items"]})
@@ -391,11 +416,10 @@ class McpHttpSecurityTests(unittest.TestCase):
         self.assertFalse((self.config.root / "filedb" / workspace).exists())
         self.assertEqual(called, set(self.app.mcp.tools))
 
-    def test_viewer_cannot_invoke_any_mutating_tool_even_with_collaboration(self):
+    def test_workspace_viewer_cannot_mutate_shared_space_but_can_create_own(self):
         self.service.file_write(self.users["owner"], {"workspaceId": self.workspace, "path": "site/owner.txt", "content": "只读保护"})
         share = self.service.share_create(self.users["owner"], {"workspaceId": self.workspace})
         mutations = {
-            "workspace_create": {"workspaceName": "viewer-forbidden"},
             "workspace_change": {"id": self.workspace, "workspaceName": "forbidden"},
             "workspace_delete": {"id": self.workspace},
             "folder_create": {"workspaceId": self.workspace, "path": "forbidden"},
@@ -407,11 +431,18 @@ class McpHttpSecurityTests(unittest.TestCase):
             "folder_delete": {"workspaceId": self.workspace, "path": "site"},
             "share_create": {"workspaceId": self.workspace},
             "share_revoke": {"id": share["id"]},
-            "member_change": {"workspaceId": self.workspace, "userId": self.users["peer"]["id"], "collaborate": True},
+            "member_change": {"workspaceId": self.workspace, "userId": self.users["peer"]["id"], "memberRole": "manager"},
             "member_delete": {"workspaceId": self.workspace, "userId": self.users["owner"]["id"]},
         }
         mutating_names = {name for name, (definition, _) in self.app.mcp.tools.items() if not definition["annotations"]["readOnlyHint"]}
-        self.assertEqual(set(mutations), mutating_names)
+        self.assertEqual(set(mutations) | {"workspace_create", "node_list"}, mutating_names)
+        status, response, _ = self.call("node_list", {"workspaceId": self.workspace}, "viewer")
+        self.assertEqual(status, 200)
+        self.assertFalse(response["result"]["isError"])
+        status, response, _ = self.call("workspace_create", {"workspaceName": "viewer-owned-" + secrets.token_hex(8)}, "viewer")
+        self.assertEqual(status, 200)
+        self.assertFalse(response["result"]["isError"])
+        self.assertEqual(response["result"]["structuredContent"]["ownerId"], self.users["viewer"]["id"])
         for name, arguments in mutations.items():
             with self.subTest(tool=name):
                 status, response, _ = self.call(name, arguments, "viewer")

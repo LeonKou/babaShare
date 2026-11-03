@@ -14,10 +14,13 @@ test("管理员新增文案三语完整且阿语方向由公共层确定", () =>
   const context = vm.createContext({ window: {}, document, console: { warn: (...values) => warnings.push(values) } });
   vm.runInContext(source("assets/i18n.js"), context);
   const i18n = context.window.I18n;
-  const keys = ["workspaceFilters", "appliedFilters", "noAppliedFilters", "resetFilters", "workspace-admin", "workspaceAdminHint", "userWorkspaces", "deleteAccount", "accountDeleted", "deleteAccountConfirm", "SELF_DELETE_FORBIDDEN", "OWNER_INVALID", "WORKSPACE_NAME_CONFLICT", "systemCustody", "accountOwned", "originalCreator", "ownerStatus", "allOwners", "allUsers", "userAssociation", "associationType", "associationAny", "associationOwner", "associationMember", "workspaceSearch", "creatorSearch", "transferWorkspace", "recipient", "transferHint", "workspaceMembers", "memberSummary", "collaborator", "independentMember", "noWorkspaceMembers", "noTransferRecipient", "openWorkspace", "emptyManagedSpaces", "managedSpaceEmptyHint", "unknownCreator"];
+  const keys = ["workspaceFilters", "appliedFilters", "noAppliedFilters", "resetFilters", "workspace-admin", "workspaceAdminHint", "userWorkspaces", "deleteAccount", "accountDeleted", "deleteAccountConfirm", "SELF_DELETE_FORBIDDEN", "OWNER_INVALID", "WORKSPACE_NAME_CONFLICT", "systemCustody", "accountOwned", "originalCreator", "ownerStatus", "allOwners", "allUsers", "userAssociation", "associationType", "associationAny", "associationOwner", "associationMember", "workspaceSearch", "creatorSearch", "transferWorkspace", "recipient", "transferHint", "workspaceMembers", "memberSummary", "memberRole_viewer", "memberRole_editor", "memberRole_manager", "noWorkspaceMembers", "noTransferRecipient", "openWorkspace", "emptyManagedSpaces", "managedSpaceEmptyHint", "unknownCreator"];
   for (const locale of ["zh-CN", "en-US", "ar-SA"]) {
     i18n.apply({ locale });
-    for (const key of keys) assert.ok(i18n.t(key).length, `${locale}:${key}`);
+    for (const key of keys) {
+      assert.ok(i18n.t(key).length, `${locale}:${key}`);
+      assert.notEqual(i18n.t(key), key, `${locale}:${key}`);
+    }
     assert.equal(document.documentElement.dir, { "zh-CN": "ltr", "en-US": "ltr", "ar-SA": "rtl" }[locale]);
   }
   assert.equal(warnings.length, 0);
@@ -74,7 +77,7 @@ function pageRealm({ afterTransfer, formDialog } = {}) {
   const users = [
     { id: "editor", nickname: "Editor", userName: "editor", role: "editor", isDisabled: false },
     { id: "admin", nickname: "Admin", userName: "admin", role: "admin", isDisabled: false },
-    { id: "viewer", nickname: "Viewer", userName: "viewer", role: "viewer", isDisabled: false },
+    { id: "invalid", nickname: "Invalid", userName: "invalid", role: "", isDisabled: false },
     { id: "disabled", nickname: "Disabled", userName: "disabled", role: "editor", isDisabled: true },
   ];
   const row = { id: "space", workspaceName: "Shared", owner: null, ownerId: null, creatorNickname: "Original", members: [], memberCount: 0, collaboratorCount: 0 };
@@ -109,7 +112,7 @@ async function userRealm({ ids = ["target"], afterDelete, confirm } = {}) {
     window: {}, document, AbortController, console,
     I18n: { t: (key) => key, subscribe() {} },
     LocalPager: () => ({ slice: (items) => items, busy() {}, reset() {} }),
-    UI: { $: (selector) => nodes.get(selector), el: create, button: (key, action) => create("button", { key, onclick: action }), formDialog() {}, toast: (text) => notices.push(text), errorText: (error) => error.message, date: () => "", empty: () => create("p"), routeUrl: (route) => route + ".html", confirm: async () => confirm ? confirm({ document, create, nodes }) : true, page: () => ({ ready: Promise.resolve(), embedded: false }) },
+    UI: { quotaSummary: () => null, $: (selector) => nodes.get(selector), el: create, button: (key, action) => create("button", { key, onclick: action }), formDialog() {}, toast: (text) => notices.push(text), errorText: (error) => error.message, date: () => "", empty: () => create("p"), routeUrl: (route) => route + ".html", confirm: async () => confirm ? confirm({ document, create, nodes }) : true, page: () => ({ ready: Promise.resolve(), embedded: false }) },
     API: async (key, options) => { calls.push({ key, options }); if (key === "me") return { id: "admin" }; if (key === "users") return list; if (key === "user" && options.method === "DELETE") { list = list.filter((user) => user.id !== options.query.id); await afterDelete?.({ document, nodes }); return {}; } },
   });
   vm.runInContext(source("assets/users.js"), context);

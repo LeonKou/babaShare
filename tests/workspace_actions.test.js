@@ -8,6 +8,18 @@ const script = fs.readFileSync(path.join(__dirname, "../web/assets/workspace.js"
 const html = fs.readFileSync(path.join(__dirname, "../web/workspace.html"), "utf8");
 const section = (start, end) => script.slice(script.indexOf(start), script.indexOf(end));
 
+test("工作区搜索与标题同行，创建入口固定起始侧，多排操作固定末侧", () => {
+  const heading = html.slice(html.indexOf('<header class="page-head workspace-heading">'), html.indexOf('</header>', html.indexOf('<header class="page-head workspace-heading">')));
+  assert(heading.includes('id="workspace-title"'));
+  assert(heading.includes('id="file-search"'));
+  assert.equal((html.match(/id="file-search"/g) || []).length, 1);
+  assert.match(html, /\.workspace-heading #file-search \{[^}]*margin-inline-start: auto/);
+  assert.match(html, /\.page:has\(#workspace-picker:not\(\[hidden\]\)\) \.workspace-operation-grid \{[^}]*margin-inline-start: 0;[^}]*margin-inline-end: auto/);
+  assert.match(html, /\.workspace-action-row > :first-child:nth-last-child\(2\) \{ grid-column: 2/);
+  assert.match(html, /\.workspace-action-row > :only-child \{ grid-column: 3/);
+  assert.match(html, /@media \(max-width: 600px\)[\s\S]*?flex-basis: 100%/);
+});
+
 function realm({ canWrite = true, kind = "file", name = "index.html", dir = "ltr", width = 320, height = 240 } = {}) {
   const events = {}, calls = [], links = [], nodes = new Map();
   const document = { documentElement: { clientWidth: width }, activeElement: null,
@@ -53,6 +65,166 @@ function realm({ canWrite = true, kind = "file", name = "index.html", dir = "ltr
   vm.runInContext(section("  async function downloadFile", "  async function previewFile"), context);
   return { context, document, nodes, events, calls, links, el, button, run: (code) => vm.runInContext(code, context) };
 }
+
+test("三档成员权限由空间契约控制，manager显示管理按钮且不依赖账户角色", () => {
+  for (const memberRole of ["viewer", "editor", "manager"]) {
+    const app = realm({ canWrite: memberRole !== "viewer" });
+    for (const key of ["#member-list", "#member-count", "#member-actions"]) app.nodes.set(key, app.el("div"));
+    app.context.workspace.memberRole = memberRole;
+    app.context.workspace.canManage = memberRole === "manager";
+    app.context.me = { role: "editor" };
+    app.context.members = [{ nickname: "成员", userId: "member", memberRole, isOwner: false }];
+    app.context.inviteMember = () => {}; app.context.manageInvitations = () => {};
+    app.run(section("  function renderMembers", "  function memberRoles"));
+    app.run("renderMembers()");
+    const actions = app.nodes.get("#member-actions").children;
+    assert.deepEqual(actions.map((node) => node.attrs.key), memberRole === "manager" ? ["invite", "inviteManage"] : []);
+    assert.equal(app.nodes.get("#member-list").children[0].children.length, memberRole === "manager" ? 3 : 2);
+    assert.equal(app.nodes.get("#member-list").children[0].children[1].children[1].attrs.text, "memberRole_" + memberRole);
+  }
+  assert.doesNotMatch(script, /collaborate|member\.role/);
+  assert.match(script, /if \(workspace\?\.canManage\)/);
+  assert.match(script, /if \(workspace\?\.canWrite\)/);
+  assert.match(script, /memberRole: v\.memberRole/);
+});
+
+test("编辑成员仅对服务端允许的本人文件展示写操作，其他文件仍可下载", () => {
+  const app = realm({ canWrite: false });
+  app.context.workspace.canWrite = true;
+  app.context.workspace.memberRole = "editor";
+  app.run("renderFiles()");
+  app.nodes.get("#file-list").children[0].children.at(-1).children[0].children.at(-1).onclick();
+  assert.deepEqual(Array.from(app.context.activeMenu.menu.children, (node) => node.attrs.key), ["previewDownload"]);
+});
+
+test("文件刷新后获取个人配额并展示，服务端配额错误不被当成上传成功", async () => {
+  const app = realm();
+  app.context.me = {};
+  app.nodes.set("#personal-quota", app.el("div"));
+  app.context.UI.quotaSummary = (quota) => app.el("p", { text: String(quota.usedFileCount) });
+  app.context.API = async (key) => { assert.equal(key, "quota"); return { usedFileCount: 7 }; };
+  app.run(section("  async function refreshQuota", "  async function loadFiles"));
+  await app.run("refreshQuota()");
+  assert.equal(app.context.me.quota.usedFileCount, 7);
+  assert.equal(app.nodes.get("#personal-quota").children[0].attrs.text, "7");
+  app.context.API = async () => { throw new Error("额度读取失败"); };
+  await app.run("refreshQuota()");
+  assert.equal(app.context.me.quota, null);
+  assert.equal(app.nodes.get("#personal-quota").children[0].attrs.text, "额度读取失败");
+  assert.match(section("  async function loadFiles", "  async function loadMembers"), /await refreshQuota\(\)/);
+  assert.match(section("  async function uploadFiles", '  $("#file-search")'), /failed = true;\s*toast\(errorText\(e\), \{ kind: "error" \}\)/);
+});
+
+test("真实文件列表成功渲染后才发进入空间回执，失败不记账且可刷新重试", async () => {
+  for (const failed of [false, true]) {
+    const app = realm(), calls = [];
+    app.nodes.set("#file-browser", app.el("section"));
+    Object.assign(app.context, { AbortController, controller: null, requestId: 0, query: "", me: { role: "editor" },
+      page: { embedded: false }, pager: { pageIndex: 1, pageSize: 20, busy() {}, accept: () => true },
+      updateUrl() {}, refreshQuota: async () => {}, renderFiles: () => calls.push("render"),
+      API: async (key) => { calls.push(key); if (key === "nodes" && failed) throw new Error("offline"); return { entries: [] }; },
+    });
+    app.run(section("  async function loadFiles", "  async function loadMembers"));
+    await app.run("loadFiles()");
+    assert.deepEqual(calls, failed ? ["nodes"] : ["nodes", "render", "onboardingVisit"]);
+  }
+});
+test("预览出票绑定真实文件路径并仅内存传递回执票据", async () => {
+  const app = realm(), calls = [];
+  app.context.API = async (key, options) => { calls.push({ key, options }); return { previewUrl: "https://example.test/baba-share/preview/p/ticket/index.html", onboardingTicket: "memory-only" }; };
+  app.context.FilePreview = { open: async (...args) => calls.push({ preview: args }) };
+  app.run(section("  async function previewFile", "  async function shareFolder"));
+  await app.run("previewFile(entries[0])");
+  assert.equal(calls[0].options.body.path, "目录/index.html");
+  assert.equal(calls[0].options.body.previewPath, undefined);
+  assert.equal(calls[1].preview[1], "https://example.test/baba-share/preview/p/ticket/index.html");
+  assert.equal(calls[1].preview[2].onboardingTicket, "memory-only");
+});
+test("现存分享只依据有效期判断可复用，不依赖已移除的撤销时间", () => {
+  const context = vm.createContext({ Date });
+  vm.runInContext(section("  const shareIsActive", "  async function shareFolder") + ";globalThis.isActive = shareIsActive;", context);
+  for (const expireTime of [null, undefined, Date.now() + 60000]) assert.equal(context.isActive({ expireTime }), true);
+  for (const expireTime of [0, Date.now(), Date.now() - 1]) assert.equal(context.isActive({ expireTime }), false);
+  assert.doesNotMatch(script, /revokedTime/);
+});
+
+test("工作区操作和文件操作共用三列等宽栅格，分页搜索独立且窄屏折行", () => {
+  assert.match(html, /\.workspace-operation-grid\s*\{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);[^}]*grid-auto-rows: 1fr;[^}]*gap: var\(--space-2\)/);
+  assert.match(html, /\.workspace-action-row\s*\{[^}]*grid-column: 1 \/ -1;[^}]*grid-template-columns: subgrid/);
+  assert.match(html, /\.workspace-action-row > \.upload-menu > summary\s*\{[^}]*min-block-size: 40px;[^}]*block-size: 100%/);
+  assert.match(html, /@media \(max-width: 420px\)[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(html, /white-space: normal;\s*overflow-wrap: anywhere/);
+  const group = html.slice(html.indexOf('<div class="workspace-operation-grid"'), html.indexOf('<section id="workspace-picker"'));
+  assert.equal((group.match(/class="workspace-action-row"/g) || []).length, 2);
+  assert.ok(group.indexOf('id="workspace-head-actions"') < group.indexOf('id="file-actions"'));
+  assert.doesNotMatch(group, /file-pagination|file-search/);
+  assert.equal((html.match(/id="file-actions"/g) || []).length, 1);
+  assert.doesNotMatch(group, /row-reverse|margin-left|margin-right/);
+});
+
+test("创建入口参数在子页消费一次，取消重载不重复打开且未知账户角色不打开", async () => {
+  for (const action of ["create", "unknown", null]) for (const role of ["editor", ""]) {
+    const context = { URL, location: new URL("https://example.test/baba-share/workspace.html" + (action ? "?action=" + action : "")),
+      me: null, workspaces: [], workspace: null, page: { ready: Promise.resolve() },
+      history: { state: null, replaceState(_, __, url) { context.location = new URL(url); } },
+      API: async (key) => key === "me" ? { role } : [], readUrl() {}, renderChrome() {},
+      async createWorkspace() { if (["admin", "editor"].includes(context.me.role)) context.opened++; }, opened: 0,
+      $: () => ({ classList: { add() {} } }), errorText: () => "失败" };
+    vm.createContext(context);
+    const startup = script.slice(script.indexOf("  await page.ready;"), script.lastIndexOf("})();"));
+    await vm.runInContext("(async () => {" + startup + "})()", context);
+    assert.equal(context.opened, action === "create" && role === "editor" ? 1 : 0);
+    assert.equal(context.location.searchParams.has("action"), false);
+    await vm.runInContext("(async () => {" + startup + "})()", context);
+    assert.equal(context.opened, action === "create" && role === "editor" ? 1 : 0);
+  }
+});
+
+test("子页创建复用服务与名称校验，未知账户角色直接调用不创建表单", async () => {
+  const context = { me: { role: "" }, I18n: { t: (key) => key }, workspaces: [],
+    forms: [], formDialog: async (...args) => { context.forms.push(args); return { id: "created" }; },
+    API: async () => [], notifyChanged() {}, async selectWorkspace(id) { context.selected = id; } };
+  vm.createContext(context);
+  vm.runInContext(section("  async function createWorkspace", "  async function editWorkspace"), context);
+  await context.createWorkspace(); assert.equal(context.forms.length, 0);
+  context.me.role = "editor";
+  await context.createWorkspace();
+  assert.equal(context.forms.length, 1); assert.equal(context.selected, "created");
+  assert.equal(context.forms[0][1][0].validator("x".repeat(101)), "invalidInput");
+  assert.equal(context.forms[0][1][0].validator("有效名称"), "");
+});
+
+test("网页新增文件统一上传，移除HTML新建模板但保留已有文件编辑重命名", () => {
+  assert.doesNotMatch(script, /newHtml|Hello, babaShare|create_file|edit_file/);
+  const actions = section('    $("#file-actions").replaceChildren();', '    $("#drop-zone").hidden');
+  assert.match(actions, /button\("newFolder"/);
+  assert.match(actions, /uploadMenu\(\)/);
+  assert.doesNotMatch(actions, /API\("content"|editFile|newHtml/);
+  assert.match(section("  async function editFile", "  async function renameEntry"), /method: "PUT"[\s\S]*path: entry\.path/);
+  assert.match(section("  async function renameEntry", "  async function deleteEntry"), /method: "PATCH"/);
+});
+
+test("上传新手引导复用上传菜单，参数仅消费一次且只读不触发上传", async () => {
+  for (const canWrite of [false, true]) {
+    const menu = { open: false, querySelector: () => ({ focus() { context.focused++; } }) };
+    const context = { URL, location: new URL("https://example.test/baba-share/workspace.html?workspaceId=space&onboardingTask=upload_file"),
+      me: null, workspace: null, workspaces: [], page: { ready: Promise.resolve() }, focused: 0, notices: [],
+      history: { state: null, replaceState(_, __, url) { context.location = new URL(url); } },
+      API: async (key) => key === "me" ? { role: "editor" } : [{ id: "space", canWrite }],
+      readUrl() {}, renderChrome() {}, loadFiles: async () => {}, loadMembers: async () => {},
+      $: (selector) => { assert.equal(selector, "#file-actions .upload-menu"); return menu; },
+      toast: (message) => context.notices.push(message), I18n: { t: (key) => key }, errorText: (error) => error.message };
+    vm.createContext(context);
+    const startup = script.slice(script.indexOf("  await page.ready;"), script.lastIndexOf("})();"));
+    await vm.runInContext("(async () => {" + startup + "})()", context);
+    assert.equal(context.location.searchParams.has("onboardingTask"), false);
+    assert.equal(menu.open, canWrite);
+    assert.equal(context.focused, canWrite ? 1 : 0);
+    assert.deepEqual(context.notices, canWrite ? [] : ["onboardingOwnSpace"]);
+    await vm.runInContext("(async () => {" + startup + "})()", context);
+    assert.equal(context.focused, canWrite ? 1 : 0);
+  }
+});
 
 test("文件行仅预览和三点，HTML编辑及目录写操作统一收纳菜单", () => {
   for (const kind of ["file", "folder"]) {

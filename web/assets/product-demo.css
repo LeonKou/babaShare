@@ -1,0 +1,76 @@
+.settings-demo-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(320px, 3fr);
+  align-items: start;
+  gap: var(--space-6);
+}
+.settings-demo-layout > #registration-form { min-inline-size: 0; max-inline-size: none; }
+.product-demo {
+  position: relative;
+  min-inline-size: 0;
+  padding: var(--space-4) 0;
+  color: var(--color-text-secondary);
+  text-align: start;
+}
+.settings-demo-layout > .product-demo { grid-column: 2; position: sticky; inset-block-start: var(--space-6); }
+.product-demo-scene { pointer-events: none; }
+.product-demo-scene svg { display: block; inline-size: 100%; max-block-size: 320px; overflow: visible; }
+.product-demo-scene path, .product-demo-scene circle, .product-demo-scene ellipse { fill: none; stroke: none; }
+.product-demo-scene .demo-ground { fill: var(--color-border); opacity: .3; }
+.product-demo-scene .demo-trousers { fill: var(--color-text-secondary); }
+.product-demo-scene .demo-shoes, .product-demo-scene .demo-hair { fill: var(--color-text-primary); }
+.product-demo-scene .demo-shirt-accent { fill: var(--color-primary); }
+.product-demo-scene .demo-shirt-neutral { fill: var(--color-border-strong); }
+.product-demo-scene .demo-arm { stroke-width: 16; stroke-linecap: round; }
+.product-demo-scene .demo-arm-accent { stroke: var(--color-primary); }
+.product-demo-scene .demo-arm-neutral { stroke: var(--color-border-strong); }
+.product-demo-scene .demo-face, .product-demo-scene .demo-neck { fill: var(--color-bg-surface); stroke: var(--color-text-secondary); stroke-width: 1; }
+.product-demo-scene .demo-hand { stroke: var(--color-text-secondary); stroke-width: 8; stroke-linecap: round; }
+.product-demo-scene .demo-pose-arm path { transition: d 220ms cubic-bezier(.2, .7, .3, 1); }
+#auth-product-demo[data-password-covered="true"] .demo-hand { stroke-width: 11; }
+.product-demo-scene .demo-eye { fill: var(--color-text-primary); }
+.product-demo-scene .demo-smile { stroke: var(--color-text-secondary); stroke-width: 1.5; stroke-linecap: round; }
+.product-demo-scene .demo-card { fill: var(--color-bg-surface); stroke: var(--color-text-secondary); stroke-width: 1.5; }
+.product-demo-scene .demo-card-art { fill: var(--color-border-strong); }
+.product-demo-scene .demo-card-sun { fill: var(--color-text-secondary); }
+.product-demo-scene .demo-character { transform-box: fill-box; transform-origin: center bottom; animation: demo-sway 10s ease-in-out infinite; }
+.product-demo-scene .demo-receiver { animation-delay: -5s; }
+.product-demo-scene .demo-eyes { transform-box: fill-box; transform-origin: center; animation: demo-blink 7s ease-in-out infinite; }
+.product-demo-scene .demo-eyes-receiver { animation-delay: -3s; }
+.product-demo-scene .demo-delivery { transform-box: fill-box; transform-origin: center; animation: demo-deliver 10s ease-in-out infinite; }
+.product-demo-scene .demo-spark { stroke: var(--color-text-secondary); stroke-width: 1.5; opacity: .4; animation: demo-spark 10s ease-in-out infinite; }
+.product-demo .product-demo-scene * { animation-play-state: paused; }
+.product-demo[data-running="true"] .product-demo-scene * { animation-play-state: running; }
+.auth-story-with-demo { padding-block: var(--space-6); gap: var(--space-4); justify-content: flex-start; }
+.auth-story-with-demo h1 { font-size: clamp(24px, 2vw, 32px); margin-block-end: var(--space-2); }
+.auth-story-with-demo .eyebrow { margin-block-end: var(--space-2); }
+.auth-story-with-demo .workspace-note { margin-block-start: var(--space-2); padding-block-start: var(--space-2); }
+.auth-story-with-demo .product-demo { flex: 1; display: grid; align-items: center; padding: 0; min-block-size: 0; }
+.auth-story-with-demo .product-demo-scene svg { block-size: clamp(240px, 40vh, 420px); max-block-size: none; }
+@media (min-width: 1001px) and (max-height: 700px) {
+  .auth-story-with-demo { padding-block: var(--space-4); gap: var(--space-2); }
+  .auth-story-with-demo .product-demo-scene svg { block-size: clamp(160px, 32vh, 224px); }
+}
+.auth-demo-story { justify-content: center; }
+.auth-body.auth-focused { grid-template-columns: minmax(0, 1fr); grid-template-areas: "panel" "branding"; }
+.auth-focused .auth-panel > section { inline-size: 100%; max-inline-size: 480px; margin-inline: auto; }
+@keyframes demo-sway { 0%, 100% { transform: rotate(-1deg); } 50% { transform: rotate(1deg) translateY(-2px); } }
+@keyframes demo-blink { 0%, 43%, 47%, 100% { transform: scaleY(1); } 45% { transform: scaleY(.1); } }
+@keyframes demo-deliver { 0%, 12%, 100% { transform: translate(0, 0) rotate(-6deg); } 44%, 58% { transform: translate(30px, -5px) rotate(5deg); } }
+@keyframes demo-spark { 0%, 25%, 75%, 100% { opacity: .15; } 50% { opacity: .6; } }
+/* 示意图无文本与控件；RTL 仅镜像双方递送的图形。 */
+[dir="rtl"] .product-demo-scene svg { transform: scaleX(-1); }
+@media (max-width: 1000px) {
+  .settings-demo-layout { grid-template-columns: minmax(0, 1fr); }
+  .product-demo { display: none; }
+  .auth-story-with-demo .product-demo { display: none; }
+  .auth-body:has(.auth-demo-story) { grid-template-columns: minmax(0, 1fr); grid-template-areas: "panel" "branding"; }
+  .auth-demo-story { display: none; }
+}
+@media (max-width: 760px) {
+  .auth-body.auth-focused, .auth-body:has(.auth-demo-story) { grid-template-areas: "settings" "panel" "branding"; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .product-demo .product-demo-scene * { animation: none; transition: none; }
+  .product-demo-scene .demo-delivery { transform: translateX(16px); }
+}

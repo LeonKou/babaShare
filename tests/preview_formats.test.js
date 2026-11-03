@@ -147,7 +147,7 @@ test("过期请求不能覆盖新预览，关闭立即abort", async () => {
   const app = environment((_, options) => { signal = options.signal; return new Promise((resolve) => { finish = resolve; }); });
   const view = app.create(new app.Element("host"));
   const old = view.load({ name: "old.txt", url });
-  await view.load({ name: "new.html", url });
+  await view.load({ name: "new.zip", url });
   assert.equal(signal.aborted, true);
   finish(response("old content")); await old;
   assert.equal(app.nodes.some((node) => node.tag === "pre"), false);
@@ -236,6 +236,7 @@ test("内容区预览初始绘制后滑入，关闭完成后才释放并保留�
 test("减少动画直接关闭，标题行只保留紧凑关闭入口", async () => {
   const app = environment(); app.reduceMotion();
   const result = app.open("index.html", url);
+  await new Promise((resolve) => setImmediate(resolve));
   const dialog = app.nodes.find((node) => node.tag === "dialog");
   assert.equal(app.nodes.filter((node) => node.tag === "button").length, 1);
   assert.equal(app.nodes.some((node) => node.classList.contains("file-preview-toolbar")), false);
@@ -248,10 +249,12 @@ test("减少动画直接关闭，标题行只保留紧凑关闭入口", async ()
 test("预览关闭动画缺失时限时退出，页面离开也清理请求", async () => {
   const app = environment();
   const result = app.open("index.html", url);
+  await new Promise((resolve) => setImmediate(resolve));
   app.nodes.find((node) => node.classList.contains("file-preview-close")).action();
   await result;
   assert.equal(app.nodes.find((node) => node.tag === "dialog").closed, true);
   const second = environment(), pending = second.open("index.html", url);
+  await new Promise((resolve) => setImmediate(resolve));
   second.events.get("pagehide")(); await pending;
   assert.equal(second.animationFrames.size, 0);
   assert.equal(second.nodes.find((node) => node.tag === "iframe").src, "about:blank");
@@ -265,6 +268,109 @@ test("预览页覆盖当前内容视口，无居中尺寸与背景留白，支�
   assert.match(css, /html\[dir="rtl"\] dialog\.file-preview-page\.is-visible\s*\{\s*transform:\s*translateX\(0\)/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
   assert.doesNotMatch(source, /parent\.document|top\.document|addEventListener\("keydown"/);
+});
+test("预览任务只在图片真实load成功后回执一次，失败与取消不回执", async () => {
+  for (const outcome of ["load", "error", "cancel"]) {
+    const app = environment(), calls = [];
+    app.context.API = async (...args) => { calls.push(args); return {}; };
+    const view = app.create(new app.Element("host"));
+    await view.load({ name: "image.png", url, onboardingTicket: "memory-only" });
+    const image = app.nodes.find((node) => node.tag === "img");
+    assert.equal(calls.length, 0);
+    if (outcome === "cancel") view.dispose();
+    else image.events.get(outcome)();
+    image.events.get("load")();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls.length, outcome === "load" ? 1 : 0);
+    if (calls.length) { assert.equal(calls[0][0], "onboardingPreview"); assert.equal(calls[0][1].body.ticket, "memory-only"); }
+    view.dispose();
+  }
+});
+test("媒体真实metadata后回执，canplay重复事件与错误后的事件不重复记账", async () => {
+  const app = environment(), calls = [];
+  app.context.API = async (...args) => { calls.push(args); return {}; };
+  const view = app.create(new app.Element("host"));
+  await view.load({ name: "clip.mp4", url, onboardingTicket: "memory-only" });
+  const media = app.nodes.find((node) => node.tag === "video");
+  assert.equal(calls.length, 0);
+  media.events.get("loadeddata")(); media.events.get("canplay")();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.length, 1); view.dispose();
+});
+test("可信预览消息验证来源、版本及握手次序，恶意上传HTML消息不回执", async () => {
+  for (const kind of ["code", "office"]) {
+    const app = environment(), calls = [];
+    app.context.API = async (...args) => { calls.push(args); return {}; };
+    const view = app.create(new app.Element("host"));
+    await view.load({ name: kind === "code" ? "sample.js" : "sample.docx", url, onboardingTicket: "memory-only" });
+    const frame = app.nodes.find((node) => node.tag === "iframe"), handler = app.events.get("message");
+    const event = { origin: "http://localhost", source: frame.contentWindow, data: { type: "preview-" + kind + ".loaded", version: 1 } };
+    handler(event); assert.equal(calls.length, 0);
+    handler({ ...event, data: { ...event.data, type: "preview-" + kind + ".ready" } });
+    handler({ ...event, origin: "null" }); handler({ ...event, source: {} }); handler({ ...event, data: { ...event.data, version: 2 } });
+    assert.equal(calls.length, 0);
+    handler(event); handler(event); await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls.length, 1); view.dispose();
+  }
+  const app = environment(), calls = [];
+  app.context.API = async (...args) => { calls.push(args); return {}; };
+  const view = app.create(new app.Element("host"));
+  await view.load({ name: "untrusted.html", url, onboardingTicket: "memory-only" });
+  assert.equal(app.events.has("message"), false); assert.equal(calls.length, 0); view.dispose();
+});
+test("预览读取或渲染失败不回执，回执网络错误保留显式重试且不保存ticket", async () => {
+  const app = environment(), calls = [];
+  app.context.API = async (...args) => { calls.push(args); if (calls.length === 1) throw new Error("offline"); return {}; };
+  const view = app.create(new app.Element("host"));
+  await view.load({ name: "sample.txt", url, onboardingTicket: "memory-only" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const retry = app.nodes.find((node) => node.tag === "button" && node.textContent === "onboardingRetry");
+  assert(retry); await retry.action(); await retry.action(); assert.equal(calls.length, 2); view.dispose();
+  assert.doesNotMatch(source, /localStorage|sessionStorage|console\.(?:log|warn|error)\([^\n]*ticket/i);
+  const broken = environment(async () => ({ ok: false, status: 404 }));
+  broken.context.API = async () => assert.fail("读取失败不应回执");
+  const failed = broken.create(new broken.Element("host"));
+  await failed.load({ name: "sample.txt", url, onboardingTicket: "memory-only" }); failed.dispose();
+});
+test("HTML必须主HTTP成功再创建iframe，读取失败与迟到load不回执", async () => {
+  for (const ok of [true, false]) {
+    let reads = 0, calls = 0;
+    const app = environment(async () => { reads++; return ok ? response("<!doctype html><p>ok</p>") : { ok: false, status: 404 }; });
+    app.context.API = async () => { calls++; return {}; };
+    const view = app.create(new app.Element("host"));
+    await view.load({ name: "index.html", url, onboardingTicket: "memory" });
+    assert.equal(reads, 1); assert.equal(calls, 0);
+    const frame = app.nodes.find((node) => node.tag === "iframe");
+    if (!ok) assert.equal(frame, undefined);
+    else { frame.events.get("error")(); frame.events.get("load")(); }
+    assert.equal(calls, 0); view.dispose();
+  }
+});
+test("关闭滑出动画开始即冻结预览回执，迟到图片或可信消息都不计", async () => {
+  for (const name of ["image.png", "sample.js"]) {
+    const app = environment(), calls = [];
+    app.context.API = async (...args) => { calls.push(args); return {}; };
+    const pending = app.open(name, url, { onboardingTicket: "memory" });
+    await new Promise((resolve) => setImmediate(resolve));
+    const frame = app.nodes.find((node) => node.tag === "iframe"), handler = app.events.get("message");
+    app.nodes.find((node) => node.classList.contains("file-preview-close")).action();
+    if (frame) {
+      handler({ origin: "http://localhost", source: frame.contentWindow, data: { version: 1, type: "preview-code.ready" } });
+      handler({ origin: "http://localhost", source: frame.contentWindow, data: { version: 1, type: "preview-code.loaded" } });
+      assert.equal(app.sent.length, 0);
+    } else app.nodes.find((node) => node.tag === "img").events.get("load")();
+    assert.equal(calls.length, 0);
+    await pending;
+  }
+});
+test("可信渲染失败后迟到ready不再交付bytes或text，元数据不算成功", async () => {
+  const app = environment(), view = app.create(new app.Element("host"));
+  app.context.API = async () => assert.fail("失败后不得回执");
+  await view.load({ name: "report.docx", url, onboardingTicket: "memory" });
+  const frame = app.nodes.find((node) => node.tag === "iframe"), handler = app.events.get("message");
+  for (const type of ["preview-office.error", "preview-office.ready", "preview-office.loaded"]) handler({ origin: "http://localhost", source: frame.contentWindow, data: { version: 1, type } });
+  assert.equal(app.sent.length, 0); view.dispose();
+  assert.doesNotMatch(source, /addEventListener\("loadedmetadata", complete\)/);
 });
 test("固定Monaco版本本地部署且保留许可，无Node运行依赖", () => {
   const root = path.join(__dirname, "../web"), code = fs.readFileSync(path.join(root, "assets/preview-code.js"), "utf8");

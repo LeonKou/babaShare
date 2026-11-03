@@ -92,6 +92,136 @@ class Service:
         self.mail_test_time = 0
         self.mail_slots = threading.BoundedSemaphore(4)
         self.activation_attempts = {}
+        self.onboarding_visits = {}
+
+    ONBOARDING_VERSION = 1
+    ONBOARDING_TASKS = ("enter_workspace", "create_folder", "upload_file", "preview_file", "create_mcp_key", "mcp_tool_call")
+
+    def onboarding_record(self, connection, user, task_key):
+        stamp = now_ms()
+        require(task_key in self.ONBOARDING_TASKS)
+        actor = connection.execute("SELECT id,is_disabled FROM sys_user WHERE id=?", (db_id(user["id"]),)).fetchone()
+        require(actor and not actor["is_disabled"], 401, "AUTH_REQUIRED", "账号已失效")
+        connection.execute("INSERT INTO onboarding_task (id,user_id,task_version,task_key,completed_time,create_time,update_time) VALUES (?,?,?,?,?,?,?) ON CONFLICT(user_id,task_version,task_key) DO NOTHING",
+                           (db_id(new_id()), actor["id"], self.ONBOARDING_VERSION, task_key, stamp, stamp, stamp))
+
+    def onboarding_detail(self, user, connection=None):
+        if connection is None:
+            with self.repo.connection() as connection:
+                return self.onboarding_detail(user, connection)
+        actor = connection.execute("SELECT nickname,user_role,is_disabled FROM sys_user WHERE id=?", (db_id(user["id"]),)).fetchone()
+        require(actor and not actor["is_disabled"], 401, "AUTH_REQUIRED", "账号已失效")
+        completed = {row["task_key"]: row["completed_time"] for row in connection.execute(
+            "SELECT task_key,completed_time FROM onboarding_task WHERE user_id=? AND task_version=?", (db_id(user["id"]), self.ONBOARDING_VERSION))}
+        preference = connection.execute("SELECT is_dismissed,is_celebration_seen FROM onboarding_preference WHERE user_id=? AND task_version=?", (db_id(user["id"]), self.ONBOARDING_VERSION)).fetchone()
+        tasks = [{"key": key, "completed": key in completed, "completedTime": completed.get(key)} for key in self.ONBOARDING_TASKS]
+        count = sum(task["completed"] for task in tasks)
+        return {"version": self.ONBOARDING_VERSION, "enabled": actor["user_role"] != "admin", "nickname": actor["nickname"],
+                "tasks": tasks, "completedCount": count, "totalCount": len(tasks), "allComplete": count == len(tasks),
+                "celebrationSeen": bool(preference and preference["is_celebration_seen"]),
+                "dismissed": bool(preference and preference["is_dismissed"])}
+
+    def onboarding_change(self, user, body):
+        require(bool(body) and set(body) <= {"dismissed", "celebrationSeen"})
+        require(all(type(value) is bool for value in body.values()))
+        with self.lock, self.repo.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            detail = self.onboarding_detail(user, connection)
+            require(not body.get("celebrationSeen") or detail["allComplete"], 409, "ONBOARDING_INCOMPLETE", "完成所有任务后才能确认彩蛋")
+            stamp = now_ms()
+            connection.execute("INSERT INTO onboarding_preference (id,user_id,task_version,is_dismissed,is_celebration_seen,create_time,update_time) VALUES (?,?,?,?,?,?,?) ON CONFLICT(user_id,task_version) DO UPDATE SET is_dismissed=excluded.is_dismissed,is_celebration_seen=excluded.is_celebration_seen,update_time=excluded.update_time",
+                               (db_id(new_id()), db_id(user["id"]), self.ONBOARDING_VERSION, int(body.get("dismissed", detail["dismissed"])),
+                                int(body.get("celebrationSeen", detail["celebrationSeen"])), stamp, stamp))
+            return self.onboarding_detail(user, connection)
+
+    def onboarding_visited(self, user, workspace_id):
+        with self.lock:
+            stamp = now_ms()
+            self.onboarding_visits = {key: expiry for key, expiry in self.onboarding_visits.items() if expiry > stamp}
+            key = (user["id"], str(uuid.UUID(str(workspace_id))))
+            self.onboarding_visits.pop(key, None)
+            if len(self.onboarding_visits) >= 4096:
+                self.onboarding_visits.pop(next(iter(self.onboarding_visits)))
+            self.onboarding_visits[key] = stamp + 300000
+
+    def onboarding_visit(self, user, session, body):
+        require(set(body) == {"workspaceId"})
+        require(isinstance(body["workspaceId"], str))
+        require(isinstance(session, str) and bool(session), 401, "AUTH_REQUIRED", "请使用有效登录会话")
+        return self.onboarding_record_visit(user, body["workspaceId"], session)
+
+    def onboarding_record_visit(self, user, workspace_id, session=None):
+        workspace_id = str(uuid.UUID(str(workspace_id)))
+        with self.lock, self.repo.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if session is not None:
+                self.account_session(connection, user, session)
+            self.access(user, workspace_id)
+            require(self.onboarding_visits.get((user["id"], workspace_id), 0) > now_ms(),
+                    409, "ONBOARDING_VISIT_REQUIRED", "请先成功读取工作空间内容")
+            self.onboarding_record(connection, user, "enter_workspace")
+            return self.onboarding_detail(user, connection)
+
+    @staticmethod
+    def onboarding_preview_supported(path):
+        name = PurePosixPath(path).name.lower()
+        extension = name.rsplit(".", 1)[-1]
+        return extension in {
+            "html", "htm", "png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "ico",
+            "mp3", "wav", "ogg", "m4a", "aac", "flac", "mp4", "webm", "ogv", "mov",
+            "md", "markdown", "mdown", "mkd", "mkdn", "txt", "text", "log", "csv", "tsv", "rst", "nfo", "conf", "cfg", "properties",
+            "js", "mjs", "cjs", "jsx", "ts", "tsx", "json", "css", "scss", "less", "py", "java", "c", "h", "cpp", "hpp", "cs",
+            "go", "rs", "rb", "php", "sh", "bash", "ps1", "sql", "xml", "yaml", "yml", "toml", "ini", "vue", "svelte",
+            "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odp", "ods", "odt", "odd", "rtf", "wps", "et", "dps"
+        } or name in {"dockerfile", "makefile", "readme", "license", "licence", "notice", "changelog"}
+
+    def onboarding_preview_main(self, workspace_id, root_path):
+        root = self.disk_path(workspace_id, root_path)
+        if root.is_file():
+            return root_path
+        if root.is_dir():
+            entry = self.repo.entry_node(workspace_id, root_path)
+            if entry and self.disk_path(workspace_id, entry["node_path"]).is_file():
+                return entry["node_path"]
+        return None
+
+    def onboarding_preview_fetched(self, token, disk):
+        # 只由控制器在实际读取资源后调用，出票或客户端回执不能生成读取证明。
+        stamp = now_ms()
+        with self.lock, self.repo.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            source = connection.execute("SELECT t1.user_id,t1.expire_time,t1.workspace_id,t1.root_path,t2.preview_path FROM preview_ticket AS t1 JOIN onboarding_preview_target AS t2 ON t2.ticket_hash=t1.ticket_hash AND t2.user_id=t1.user_id AND t2.workspace_id=t1.workspace_id WHERE t1.ticket_hash=? AND t1.expire_time>? AND t2.expire_time>?", (digest(token), stamp, stamp)).fetchone()
+            if not source:
+                return
+            workspace_id = str(uuid.UUID(bytes=source["workspace_id"]))
+            self.access(self.repo.user(str(uuid.UUID(bytes=source["user_id"]))), workspace_id)
+            target = self.onboarding_preview_main(workspace_id, source["root_path"])
+            if target != source["preview_path"] or disk != self.disk_path(workspace_id, target) or not disk.is_file() or not self.onboarding_preview_supported(target):
+                return
+            connection.execute("DELETE FROM onboarding_preview_proof WHERE expire_time<=?", (stamp,))
+            connection.execute("INSERT INTO onboarding_preview_proof (id,user_id,ticket_hash,proof_purpose,target_path,expire_time,create_time,update_time) VALUES (?,?,?,'preview_file',?,?,?,?) ON CONFLICT(ticket_hash) DO UPDATE SET target_path=excluded.target_path,expire_time=excluded.expire_time,update_time=excluded.update_time",
+                               (db_id(new_id()), source["user_id"], digest(token), target, min(source["expire_time"], stamp + 300000), stamp, stamp))
+
+    def onboarding_preview(self, user, session, body):
+        require(set(body) == {"ticket"})
+        token = body.get("ticket")
+        require(isinstance(token, str) and 20 <= len(token) <= 100)
+        with self.lock, self.repo.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self.account_session(connection, user, session)
+            source = connection.execute("SELECT workspace_id,root_path FROM preview_ticket WHERE ticket_hash=? AND user_id=? AND expire_time>?",
+                                        (digest(token), db_id(user["id"]), now_ms())).fetchone()
+            require(source, 404, "PREVIEW_EXPIRED", "预览凭据已失效")
+            workspace_id = str(uuid.UUID(bytes=source["workspace_id"]))
+            self.access(user, workspace_id)
+            target = connection.execute("SELECT preview_path FROM onboarding_preview_target WHERE ticket_hash=? AND user_id=? AND expire_time>?", (digest(token), db_id(user["id"]), now_ms())).fetchone()
+            require(target and target["preview_path"] == self.onboarding_preview_main(workspace_id, source["root_path"]) and self.onboarding_preview_supported(target["preview_path"]),
+                    409, "PREVIEW_NOT_READY", "预览主文件不存在或不支持完成确认")
+            proof = connection.execute("SELECT id FROM onboarding_preview_proof WHERE ticket_hash=? AND user_id=? AND proof_purpose='preview_file' AND target_path=? AND expire_time>?",
+                                       (digest(token), db_id(user["id"]), target["preview_path"], now_ms())).fetchone()
+            require(proof, 409, "PREVIEW_NOT_READY", "尚无有效的预览资源读取证明")
+            self.onboarding_record(connection, user, "preview_file")
+            return self.onboarding_detail(user, connection)
 
     def install_detail(self):
         count = self.repo.one("SELECT count(*) AS user_count FROM sys_user")["user_count"]
@@ -99,12 +229,45 @@ class Service:
         return {"setupRequired": count == 0, "registrationEnabled": bool(setting["is_registration_enabled"]),
                 "emailRegistrationEnabled": bool(setting["is_email_registration_enabled"])}
 
-    @staticmethod
-    def user_view(user):
+    def user_view(self, user, connection=None, include_quota=True):
         return {"id": user["id"], "userName": user["user_name"], "nickname": user["nickname"],
                 "role": user["user_role"], "isDisabled": bool(user["is_disabled"]),
                 "email": user.get("email"), "emailVerified": bool(user.get("is_email_verified")),
+                **({"quota": self.quota_detail(user, connection)} if include_quota else {}),
                 "createTime": user["create_time"], "updateTime": user["update_time"]}
+
+    @staticmethod
+    def quota_value(value, nullable=False):
+        require((nullable and value is None) or (type(value) is int and 0 <= value <= 9007199254740991),
+                400, "QUOTA_INVALID", "配额必须为非负安全整数，个人配额可为空以继承默认值")
+        return value
+
+    def quota_detail(self, user, connection=None):
+        if connection is None:
+            with self.repo.connection() as connection:
+                connection.execute("BEGIN")
+                return self.quota_detail(user, connection)
+        row = connection.execute("SELECT file_count_limit,storage_bytes_limit FROM sys_user WHERE id=?", (db_id(user["id"]),)).fetchone()
+        require(row, 404, "USER_NOT_EXIST", "账号不存在")
+        defaults = connection.execute("SELECT default_file_count_limit,default_storage_bytes_limit FROM app_setting LIMIT 1").fetchone()
+        usage = connection.execute("SELECT count(*) AS file_count,COALESCE(sum(size_bytes),0) AS storage_bytes FROM workspace_node WHERE owner_id=? AND node_kind='file'", (db_id(user["id"]),)).fetchone()
+        return {"fileCountLimit": row["file_count_limit"], "storageBytesLimit": row["storage_bytes_limit"],
+                "defaultFileCountLimit": defaults["default_file_count_limit"],
+                "defaultStorageBytesLimit": defaults["default_storage_bytes_limit"],
+                "effectiveFileCountLimit": defaults["default_file_count_limit"] if row["file_count_limit"] is None else row["file_count_limit"],
+                "effectiveStorageBytesLimit": defaults["default_storage_bytes_limit"] if row["storage_bytes_limit"] is None else row["storage_bytes_limit"],
+                "usedFileCount": usage["file_count"], "usedStorageBytes": usage["storage_bytes"]}
+
+    def check_quota(self, connection, owner_id, file_delta, bytes_delta):
+        if owner_id is None:
+            return
+        quota = self.quota_detail({"id": owner_id}, connection)
+        require(file_delta <= 0 or not quota["effectiveFileCountLimit"] or
+                quota["usedFileCount"] + file_delta <= quota["effectiveFileCountLimit"],
+                409, "FILE_COUNT_QUOTA_EXCEEDED", "文件数量超过所有者配额")
+        require(bytes_delta <= 0 or not quota["effectiveStorageBytesLimit"] or
+                quota["usedStorageBytes"] + bytes_delta <= quota["effectiveStorageBytesLimit"],
+                409, "STORAGE_QUOTA_EXCEEDED", "文件总容量超过所有者配额")
 
     def account(self, body, mode="admin", actor=None):
         with self.lock, self.repo.connection() as connection:
@@ -125,11 +288,11 @@ class Service:
             else:
                 self.admin(actor)
                 self.active_admin(connection, actor)
-                role = body.get("role", "viewer")
+                role = body.get("role", "editor")
             name = body.get("userName", "")
             require(isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_.@-]{3,64}", name),
                     msg="账号为3至64位字母数字或_.@-")
-            require(role in ("admin", "editor", "viewer"))
+            require(role in ("admin", "editor"))
             nickname = body.get("nickname", name)
             require(isinstance(nickname, str) and 1 <= len(nickname) <= 64)
             # 邮箱所有权仅由登录用户的验证流程建立，管理员建号也不能代为绑定。
@@ -146,7 +309,7 @@ class Service:
             hashed = password_hash(body.get("password"))
             connection.execute("INSERT INTO sys_user (id,user_name,nickname,password_hash,user_role,is_disabled,email,create_time,update_time) VALUES (?,?,?,?,?,0,?,?,?)",
                                (db_id(user_id), name, nickname, hashed, role, email, stamp, stamp))
-            return self.user_view(public_row(connection.execute("SELECT " + USER_COLUMNS + " FROM sys_user WHERE id=?", (db_id(user_id),)).fetchone()))
+            return self.user_view(public_row(connection.execute("SELECT " + USER_COLUMNS + " FROM sys_user WHERE id=?", (db_id(user_id),)).fetchone()), connection)
 
     def new_session(self, user_id, connection=None):
         if connection is None:
@@ -193,13 +356,12 @@ class Service:
     def mcp_key_view(row):
         stamp = now_ms()
         return {"id": row["id"], "keyName": row["key_name"], "keyPrefix": row["key_prefix"],
-                "expireTime": row["expire_time"], "revokedTime": row["revoked_time"],
+                "expireTime": row["expire_time"],
                 "createTime": row["create_time"], "updateTime": row["update_time"],
-                "isActive": row["revoked_time"] is None and
-                (row["expire_time"] is None or row["expire_time"] > stamp)}
+                "isActive": row["expire_time"] is None or row["expire_time"] > stamp}
 
     def mcp_keys(self, user):
-        rows = self.repo.all("SELECT id,key_name,key_prefix,expire_time,revoked_time,create_time,update_time FROM auth_mcp_key WHERE user_id=? ORDER BY create_time DESC",
+        rows = self.repo.all("SELECT id,key_name,key_prefix,expire_time,create_time,update_time FROM auth_mcp_key WHERE user_id=? ORDER BY create_time DESC",
                              (db_id(user["id"]),))
         return [self.mcp_key_view(row) for row in rows]
 
@@ -245,25 +407,35 @@ class Service:
         secret = hmac.new(master, context, hashlib.sha256).digest()
         return "bsk-" + base64.urlsafe_b64encode(secret).decode().rstrip("=")
 
+    @staticmethod
+    def mcp_derivation_valid(row):
+        return bool(row and row["mcp_derivation_version"] == "hmac-sha256-v1" and
+                    isinstance(row["mcp_derivation_nonce"], str) and
+                    re.fullmatch(r"[0-9a-f]{64}", row["mcp_derivation_nonce"]) and
+                    isinstance(row["key_hash"], str) and re.fullmatch(r"[0-9a-f]{64}", row["key_hash"]))
+
+    def mcp_stored_key(self, row):
+        require(self.mcp_derivation_valid(row),
+                503, "MCP_KEY_RECOVERY_UNAVAILABLE", "派生信息不可用")
+        try:
+            token = self.mcp_derived_key(row["user_id"], row["id"], row["mcp_derivation_nonce"])
+        except (ValueError, TypeError):
+            raise BizError(503, "MCP_KEY_RECOVERY_UNAVAILABLE", "派生信息不可用") from None
+        require(hmac.compare_digest(digest(token), row["key_hash"]),
+                503, "MCP_KEY_RECOVERY_UNAVAILABLE", "主密钥与凭据摘要不匹配，请检查主密钥与数据库")
+        return token
+
     def mcp_key_content(self, user, key_id):
         require(isinstance(key_id, str), msg="密钥ID不合法")
         with self.lock, self.repo.connection() as connection:
             # 与创建及删除串行；恢复只读取，不生成主密钥或新MCP凭据。
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute("SELECT id,key_hash,expire_time,revoked_time,mcp_derivation_version,mcp_derivation_nonce FROM auth_mcp_key WHERE id=? AND user_id=?",
+            row = connection.execute("SELECT id,user_id,key_hash,expire_time,mcp_derivation_version,mcp_derivation_nonce FROM auth_mcp_key WHERE id=? AND user_id=?",
                                      (db_id(key_id), db_id(user["id"]))).fetchone()
             require(row, 404, "MCP_KEY_NOT_EXIST", "密钥不存在")
-            require(row["revoked_time"] is None and (row["expire_time"] is None or row["expire_time"] > now_ms()),
-                    409, "MCP_KEY_INACTIVE", "已撤销或过期的密钥不能复制")
-            require(row["mcp_derivation_version"] is not None, 409, "MCP_KEY_NOT_RECOVERABLE", "旧密钥仅保存摘要，请另行创建新密钥；不会自动撤销旧密钥")
-            require(row["mcp_derivation_version"] == "hmac-sha256-v1" and
-                    isinstance(row["mcp_derivation_nonce"], str) and
-                    re.fullmatch(r"[0-9a-f]{64}", row["mcp_derivation_nonce"]),
-                    503, "MCP_KEY_RECOVERY_UNAVAILABLE", "派生信息不可用")
-            token = self.mcp_derived_key(user["id"], key_id, row["mcp_derivation_nonce"])
-            require(hmac.compare_digest(digest(token), row["key_hash"]),
-                    503, "MCP_KEY_RECOVERY_UNAVAILABLE", "主密钥与凭据摘要不匹配，请恢复正确备份")
-            return {"key": token}
+            require(row["expire_time"] is None or row["expire_time"] > now_ms(),
+                    409, "MCP_KEY_INACTIVE", "过期的密钥不能复制")
+            return {"key": self.mcp_stored_key(public_row(row))}
 
     def mcp_key_create(self, user, body):
         name, hours, request_id = body.get("keyName"), body.get("expireHours"), body.get("requestId")
@@ -285,23 +457,21 @@ class Service:
                 require(existing["request_hash"] == request_hash, 409, "REQUEST_CONFLICT", "同一requestId不能用于不同参数")
                 raise BizError(409, "KEY_ALREADY_CREATED", "密钥已经创建，请在列表中复制使用；不会重复创建")
             stamp = now_ms()
-            count = connection.execute("SELECT count(*) AS key_count FROM auth_mcp_key WHERE user_id=? AND revoked_time IS NULL AND (expire_time IS NULL OR expire_time>?)",
+            count = connection.execute("SELECT count(*) AS key_count FROM auth_mcp_key WHERE user_id=? AND (expire_time IS NULL OR expire_time>?)",
                                        (db_id(user["id"]), stamp)).fetchone()["key_count"]
             require(count < 10, 409, "MCP_KEY_LIMIT", "有效密钥最多10个")
-            sample = connection.execute("SELECT id,user_id,key_hash,mcp_derivation_nonce FROM auth_mcp_key WHERE mcp_derivation_version IS NOT NULL LIMIT 1").fetchone()
-            if sample:
-                expected = self.mcp_derived_key(str(uuid.UUID(bytes=sample["user_id"])),
-                                                str(uuid.UUID(bytes=sample["id"])), sample["mcp_derivation_nonce"])
-                require(hmac.compare_digest(digest(expected), sample["key_hash"]),
-                        503, "MCP_KEY_RECOVERY_UNAVAILABLE", "主密钥不匹配，请恢复正确备份")
+            stored_keys = connection.execute("SELECT id,user_id,key_hash,mcp_derivation_version,mcp_derivation_nonce FROM auth_mcp_key").fetchall()
+            for stored_key in stored_keys:
+                self.mcp_stored_key(public_row(stored_key))
             key_id, nonce = new_id(), secrets.token_hex(32)
-            token = self.mcp_derived_key(user["id"], key_id, nonce, create_master=sample is None)
+            token = self.mcp_derived_key(user["id"], key_id, nonce, create_master=not stored_keys)
             expiry = stamp + hours * 3600000 if hours is not None else None
-            connection.execute("INSERT INTO auth_mcp_key (id,user_id,key_name,key_prefix,key_hash,request_id,request_hash,expire_time,revoked_time,mcp_derivation_version,mcp_derivation_nonce,create_time,update_time) VALUES (?,?,?,?,?,?,?,?,NULL,?,?,?,?)",
+            connection.execute("INSERT INTO auth_mcp_key (id,user_id,key_name,key_prefix,key_hash,request_id,request_hash,expire_time,mcp_derivation_version,mcp_derivation_nonce,create_time,update_time) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                                (db_id(key_id), db_id(user["id"]), name, token[:12], digest(token), request_id,
                                 request_hash, expiry, "hmac-sha256-v1", nonce, stamp, stamp))
+            self.onboarding_record(connection, user, "create_mcp_key")
             row = {"id": key_id, "key_name": name, "key_prefix": token[:12], "expire_time": expiry,
-                   "revoked_time": None, "create_time": stamp, "update_time": stamp}
+                   "create_time": stamp, "update_time": stamp}
             return {**self.mcp_key_view(row), "key": token}
 
     def mcp_key_delete(self, user, key_id):
@@ -317,9 +487,12 @@ class Service:
     def mcp_authenticated(self, token):
         require(isinstance(token, str) and re.fullmatch(r"bsk-[A-Za-z0-9_-]{43}", token),
                 401, "AUTH_REQUIRED", "MCP密钥无效")
-        row = self.repo.one("SELECT user_id FROM auth_mcp_key WHERE key_hash=? AND revoked_time IS NULL AND (expire_time IS NULL OR expire_time>?)",
-                            (digest(token), now_ms()))
-        user = self.repo.user(row["user_id"]) if row else None
+        token_hash = digest(token)
+        row = self.repo.one("SELECT user_id,key_hash,mcp_derivation_version,mcp_derivation_nonce FROM auth_mcp_key WHERE key_hash=? AND (expire_time IS NULL OR expire_time>?)",
+                            (token_hash, now_ms()))
+        require(self.mcp_derivation_valid(row) and hmac.compare_digest(token_hash, row["key_hash"]),
+                401, "AUTH_REQUIRED", "MCP密钥无效")
+        user = self.repo.user(row["user_id"])
         require(user and not user["is_disabled"], 401, "AUTH_REQUIRED", "MCP密钥无效或账号已禁用")
         return user
 
@@ -329,11 +502,14 @@ class Service:
 
     def users(self, user):
         self.admin(user)
-        return [self.user_view(row) for row in self.repo.all("SELECT " + USER_COLUMNS + " FROM sys_user ORDER BY create_time")]
+        with self.repo.connection() as connection:
+            connection.execute("BEGIN")
+            self.active_admin(connection, user)
+            return [self.user_view(public_row(row), connection) for row in connection.execute("SELECT " + USER_COLUMNS + " FROM sys_user ORDER BY create_time")]
 
     def change_user(self, actor, body):
         self.admin(actor)
-        require(isinstance(body, dict) and not (set(body) - {"id", "userName", "nickname", "role", "isDisabled", "password"}))
+        require(isinstance(body, dict) and not (set(body) - {"id", "userName", "nickname", "role", "isDisabled", "password", "fileCountLimit", "storageBytesLimit"}))
         with self.lock, self.repo.connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             self.active_admin(connection, actor)
@@ -345,7 +521,7 @@ class Service:
                     msg="登录账号须为3至64位字母数字或_.@-，或最多254字符的有效邮箱")
             role = body.get("role", target["user_role"])
             disabled = body.get("isDisabled", bool(target["is_disabled"]))
-            require(role in ("admin", "editor", "viewer") and isinstance(disabled, bool))
+            require(role in ("admin", "editor") and isinstance(disabled, bool))
             require(not (target["id"] == actor["id"] and disabled), 409,
                     "SELF_DISABLE_FORBIDDEN", "不能禁用当前登录的本人账户")
             if target["user_role"] == "admin" and not target["is_disabled"] and (role != "admin" or disabled):
@@ -356,9 +532,11 @@ class Service:
             password = body.get("password", "")
             require(isinstance(password, str))
             hashed = password_hash(password) if password else target["password_hash"]
+            file_limit = self.quota_value(body.get("fileCountLimit", target["file_count_limit"]), nullable=True)
+            bytes_limit = self.quota_value(body.get("storageBytesLimit", target["storage_bytes_limit"]), nullable=True)
             try:
-                connection.execute("UPDATE sys_user SET user_name=?,user_role=?,is_disabled=?,nickname=?,password_hash=?,update_time=? WHERE id=?",
-                                   (name, role, int(disabled), nickname, hashed, now_ms(), db_id(target["id"])))
+                connection.execute("UPDATE sys_user SET user_name=?,user_role=?,is_disabled=?,nickname=?,password_hash=?,file_count_limit=?,storage_bytes_limit=?,update_time=? WHERE id=?",
+                                   (name, role, int(disabled), nickname, hashed, file_limit, bytes_limit, now_ms(), db_id(target["id"])))
             except sqlite3.IntegrityError:
                 raise BizError(409, "USER_EXISTS", "登录账号已经存在") from None
             if disabled or password:
@@ -366,7 +544,7 @@ class Service:
                 connection.execute("DELETE FROM account_email_token WHERE user_id=?", (db_id(target["id"]),))
             updated = public_row(connection.execute("SELECT " + USER_COLUMNS + " FROM sys_user WHERE id=?",
                                                     (db_id(target["id"]),)).fetchone())
-            return self.user_view(updated)
+            return self.user_view(updated, connection)
 
     def user_delete(self, actor, user_id):
         self.admin(actor)
@@ -392,6 +570,10 @@ class Service:
             connection.execute("DELETE FROM folder_share WHERE owner_id=?", (target_id,))
             connection.execute("DELETE FROM workspace_invitation WHERE creator_id=?", (target_id,))
             connection.execute("DELETE FROM preview_ticket WHERE user_id=?", (target_id,))
+            connection.execute("DELETE FROM onboarding_preview_proof WHERE user_id=?", (target_id,))
+            connection.execute("DELETE FROM onboarding_preview_target WHERE user_id=?", (target_id,))
+            connection.execute("DELETE FROM onboarding_preference WHERE user_id=?", (target_id,))
+            connection.execute("DELETE FROM onboarding_task WHERE user_id=?", (target_id,))
             connection.execute("DELETE FROM email_activation WHERE user_name=?", (target["user_name"],))
             connection.execute("DELETE FROM account_email_token WHERE user_id=?", (target_id,))
             connection.execute("DELETE FROM sys_user WHERE id=?", (target_id,))
@@ -432,22 +614,22 @@ class Service:
             page_ids = [db_id(row["id"]) for row in rows]
             owner_ids = [db_id(row["owner_id"]) for row in rows if row["owner_id"]]
             users = {row["id"]: row for row in (public_row(row) for row in connection.execute("SELECT id,user_name,nickname,user_role,is_disabled,create_time,update_time FROM sys_user WHERE id IN (" + ",".join("?" for _ in owner_ids) + ")", owner_ids))} if owner_ids else {}
-            membership = [public_row(row) for row in connection.execute("SELECT t1.workspace_id,t1.is_collaborate,t2.id,t2.user_name,t2.nickname,t2.user_role,t2.is_disabled,t2.create_time,t2.update_time FROM workspace_member AS t1 JOIN sys_user AS t2 ON t2.id=t1.user_id WHERE t1.workspace_id IN (" + ",".join("?" for _ in page_ids) + ") ORDER BY t2.create_time,t2.id", page_ids)] if page_ids else []
+            membership = [public_row(row) for row in connection.execute("SELECT t1.workspace_id,t1.member_role,t2.id,t2.user_name,t2.nickname,t2.user_role,t2.is_disabled,t2.create_time,t2.update_time FROM workspace_member AS t1 JOIN sys_user AS t2 ON t2.id=t1.user_id WHERE t1.workspace_id IN (" + ",".join("?" for _ in page_ids) + ") ORDER BY t2.create_time,t2.id", page_ids)] if page_ids else []
         by_workspace = {}
         for member in membership:
-            by_workspace.setdefault(member["workspace_id"], []).append({**self.user_view(member), "userId": member["id"], "collaborate": bool(member["is_collaborate"]), "isOwner": False})
+            by_workspace.setdefault(member["workspace_id"], []).append({**self.user_view(member, include_quota=False), "userId": member["id"], "memberRole": member["member_role"], "isOwner": False})
         result = []
         for row in rows:
             owner = users.get(row["owner_id"])
             members = [member for member in by_workspace.get(row["id"], []) if member["id"] != row["owner_id"]]
             if owner:
-                members.insert(0, {**self.user_view(owner), "userId": owner["id"], "collaborate": True, "isOwner": True})
+                members.insert(0, {**self.user_view(owner, include_quota=False), "userId": owner["id"], "memberRole": "manager", "isOwner": True})
             result.append({"id": row["id"], "workspaceName": row["workspace_name"], "description": row["description"],
-                           "ownerId": row["owner_id"], "owner": self.user_view(owner) if owner else None,
+                           "ownerId": row["owner_id"], "owner": self.user_view(owner, include_quota=False) if owner else None,
                            "ownerStatus": "system" if row["owner_id"] is None else "account",
                            "creatorId": row["creator_id"], "creatorNickname": row["creator_nickname"],
                            "members": members, "memberCount": len(members),
-                           "collaboratorCount": sum(member["collaborate"] and not member["isDisabled"] and member["role"] in ("admin", "editor") for member in members),
+                           "collaboratorCount": sum(member["memberRole"] in ("editor", "manager") and not member["isDisabled"] for member in members),
                            "createTime": row["create_time"], "updateTime": row["update_time"]})
         return {"pageIndex": page_index, "pageSize": page_size, "totalCount": total,
                 "totalPage": (total + page_size - 1) // page_size, "data": result}
@@ -469,6 +651,9 @@ class Service:
             conflict = connection.execute("SELECT id FROM project_workspace WHERE owner_id=? AND workspace_name=? AND id<>?",
                                           (owner_id, row["workspace_name"], workspace_id)).fetchone()
             require(not conflict, 409, "WORKSPACE_NAME_CONFLICT", "接收人已有同名工作空间，请先处理重名；不会覆盖或自动改名")
+            incoming = connection.execute("SELECT count(*) AS file_count,COALESCE(sum(size_bytes),0) AS storage_bytes FROM workspace_node WHERE workspace_id=? AND node_kind='file' AND (owner_id IS NULL OR owner_id=?)",
+                                          (workspace_id, row["owner_id"])).fetchone()
+            self.check_quota(connection, body["ownerId"], incoming["file_count"], incoming["storage_bytes"])
             stamp = now_ms()
             connection.execute("UPDATE project_workspace SET owner_id=?,update_time=? WHERE id=?", (owner_id, stamp, workspace_id))
             # 仅转交系统托管节点与原所有者节点；其他成员的节点及成员配置保持原样。
@@ -485,10 +670,14 @@ class Service:
             try:
                 with self.repo.connection() as connection:
                     connection.execute("BEGIN IMMEDIATE")
-                    row = connection.execute("SELECT id,is_registration_enabled,is_email_registration_enabled FROM app_setting LIMIT 1").fetchone()
+                    self.active_admin(connection, user)
+                    row = connection.execute("SELECT id,is_registration_enabled,is_email_registration_enabled,default_file_count_limit,default_storage_bytes_limit FROM app_setting LIMIT 1").fetchone()
                     enabled, email_enabled = bool(row["is_registration_enabled"]), bool(row["is_email_registration_enabled"])
+                    file_limit, bytes_limit = row["default_file_count_limit"], row["default_storage_bytes_limit"]
                     if body is not None:
-                        require(isinstance(body, dict) and not (set(body) - {"registrationEnabled", "emailRegistrationEnabled", "mailSettings"}))
+                        require(isinstance(body, dict) and not (set(body) - {"registrationEnabled", "emailRegistrationEnabled", "mailSettings", "defaultFileCountLimit", "defaultStorageBytesLimit"}))
+                        file_limit = self.quota_value(body.get("defaultFileCountLimit", file_limit))
+                        bytes_limit = self.quota_value(body.get("defaultStorageBytesLimit", bytes_limit))
                         enabled = body.get("registrationEnabled", enabled)
                         email_enabled = body.get("emailRegistrationEnabled", email_enabled)
                         require(type(enabled) is bool and type(email_enabled) is bool)
@@ -511,13 +700,14 @@ class Service:
                             secret_written = True
                         if enabled != bool(row["is_registration_enabled"]) or email_enabled != bool(row["is_email_registration_enabled"]):
                             connection.execute("DELETE FROM email_activation WHERE id IS NOT NULL")
-                        connection.execute("UPDATE app_setting SET is_registration_enabled=?,is_email_registration_enabled=?,mail_settings=?,registration_revision=registration_revision+1,update_time=? WHERE id=?",
-                                           (int(enabled), int(email_enabled), json.dumps(settings), now_ms(), row["id"]))
+                        connection.execute("UPDATE app_setting SET is_registration_enabled=?,is_email_registration_enabled=?,mail_settings=?,default_file_count_limit=?,default_storage_bytes_limit=?,registration_revision=registration_revision+1,update_time=? WHERE id=?",
+                                           (int(enabled), int(email_enabled), json.dumps(settings), file_limit, bytes_limit, now_ms(), row["id"]))
             except Exception:
                 if secret_written:
                     self.smtp_password(previous or None, clear=not bool(previous))
                 raise
-        return {"registrationEnabled": enabled, "emailRegistrationEnabled": email_enabled}
+        return {"registrationEnabled": enabled, "emailRegistrationEnabled": email_enabled,
+                "defaultFileCountLimit": file_limit, "defaultStorageBytesLimit": bytes_limit}
 
     @staticmethod
     def valid_email(value):
@@ -1034,21 +1224,21 @@ class Service:
         user = current
         workspace = self.repo.workspace(workspace_id)
         require(workspace, 404, "WORKSPACE_NOT_EXIST", "工作空间不存在")
-        manager = user["user_role"] == "admin" or workspace["owner_id"] == user["id"]
-        member = self.repo.one("SELECT is_collaborate FROM workspace_member WHERE workspace_id=? AND user_id=?",
+        member = self.repo.one("SELECT member_role FROM workspace_member WHERE workspace_id=? AND user_id=?",
                                (db_id(workspace_id), db_id(user["id"])))
+        manager = user["user_role"] == "admin" or workspace["owner_id"] == user["id"] or bool(member and member["member_role"] == "manager")
         require(manager or member, 403, "PERMISSION_DENIED", "无权访问工作空间")
-        require(not manage or manager, 403, "PERMISSION_DENIED", "仅所有者和管理员可管理")
-        require(not write or user["user_role"] in ("admin", "editor"), 403,
-                "READ_ONLY", "查看者始终只读")
-        return workspace, manager, bool(member and member["is_collaborate"])
+        role = "manager" if manager else member["member_role"]
+        require(not manage or manager, 403, "PERMISSION_DENIED", "仅工作区管理者可管理")
+        require(not write or role in ("editor", "manager"), 403, "READ_ONLY", "工作区查看者始终只读")
+        return workspace, manager, role
 
     def workspace_view(self, user, row):
-        _, manager, collaborate = self.access(user, row["id"])
+        _, manager, role = self.access(user, row["id"])
         return {"id": row["id"], "workspaceName": row["workspace_name"], "description": row["description"],
                 "ownerId": row["owner_id"], "creatorId": row["creator_id"],
                 "creatorNickname": row["creator_nickname"], "canManage": manager,
-                "canWrite": user["user_role"] in ("admin", "editor"), "collaborate": collaborate,
+                "canWrite": role in ("editor", "manager"), "memberRole": role,
                 "createTime": row["create_time"]}
 
     def workspaces(self, user):
@@ -1080,14 +1270,15 @@ class Service:
             return self.workspace_view(user, self.repo.workspace(workspace_id))
 
     def workspace_change(self, user, body):
-        workspace, _, _ = self.access(user, body.get("id"), manage=True, write=True)
-        name = body.get("workspaceName", workspace["workspace_name"])
-        description = body.get("description", workspace["description"])
-        require(isinstance(name, str) and 1 <= len(name.strip()) <= 100)
-        require(isinstance(description, str) and len(description) <= 500)
-        self.repo.execute("UPDATE project_workspace SET workspace_name=?,description=?,update_time=? WHERE id=?",
-                          (name.strip(), description, now_ms(), db_id(workspace["id"])))
-        return self.workspace_view(user, self.repo.workspace(workspace["id"]))
+        with self.lock:
+            workspace, _, _ = self.access(user, body.get("id"), manage=True, write=True)
+            name = body.get("workspaceName", workspace["workspace_name"])
+            description = body.get("description", workspace["description"])
+            require(isinstance(name, str) and 1 <= len(name.strip()) <= 100)
+            require(isinstance(description, str) and len(description) <= 500)
+            self.repo.execute("UPDATE project_workspace SET workspace_name=?,description=?,update_time=? WHERE id=?",
+                              (name.strip(), description, now_ms(), db_id(workspace["id"])))
+            return self.workspace_view(user, self.repo.workspace(workspace["id"]))
 
     def workspace_delete(self, user, workspace_id):
         with self.lock:
@@ -1111,7 +1302,7 @@ class Service:
     @staticmethod
     def invitation_view(row):
         return {"id": row["id"], "workspaceId": row["workspace_id"],
-                "collaborate": bool(row["is_collaborate"]), "expireTime": row["expire_time"],
+                "memberRole": row["member_role"], "expireTime": row["expire_time"],
                 "createTime": row["create_time"], "isActive": row["expire_time"] > now_ms()}
 
     @staticmethod
@@ -1120,24 +1311,26 @@ class Service:
         require(actor and not actor["is_disabled"], 401, "AUTH_REQUIRED", "账号已失效")
         workspace = connection.execute("SELECT id,owner_id FROM project_workspace WHERE id=?", (db_id(workspace_id),)).fetchone()
         require(workspace, 404, "WORKSPACE_NOT_EXIST", "工作区不存在")
-        require(actor["user_role"] in ("admin", "editor") and
-                (actor["user_role"] == "admin" or workspace["owner_id"] == actor["id"]),
-                403, "PERMISSION_DENIED", "仅有效所有者和管理员可管理邀请")
+        member = connection.execute("SELECT member_role FROM workspace_member WHERE workspace_id=? AND user_id=?",
+                                    (db_id(workspace_id), actor["id"])).fetchone()
+        require(actor["user_role"] == "admin" or workspace["owner_id"] == actor["id"] or
+                member and member["member_role"] == "manager",
+                403, "PERMISSION_DENIED", "仅有效工作区管理者可管理邀请")
 
     def invitations(self, user, workspace_id):
         with self.repo.connection() as connection:
             self.invitation_manager(connection, user["id"], workspace_id)
-            rows = connection.execute("SELECT id,workspace_id,is_collaborate,expire_time,create_time FROM workspace_invitation WHERE workspace_id=? ORDER BY create_time DESC",
+            rows = connection.execute("SELECT id,workspace_id,member_role,expire_time,create_time FROM workspace_invitation WHERE workspace_id=? ORDER BY create_time DESC",
                                       (db_id(workspace_id),)).fetchall()
             return [self.invitation_view(public_row(row)) for row in rows]
 
     def invitation_create(self, user, body):
         workspace_id, request_id = body.get("workspaceId"), body.get("requestId")
-        collaborate, hours = body.get("collaborate", False), body.get("expireHours", 168)
-        require(type(collaborate) is bool and type(hours) is int and 1 <= hours <= 720)
+        role, hours = body.get("memberRole", "viewer"), body.get("expireHours", 168)
+        require("collaborate" not in body and role in ("viewer", "editor", "manager") and type(hours) is int and 1 <= hours <= 720)
         require(isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{16,100}", request_id),
                 msg="requestId必须为16至100位随机请求标识")
-        fingerprint = digest(str(workspace_id) + "\n" + str(collaborate) + "\n" + str(hours))
+        fingerprint = digest(str(workspace_id) + "\n" + role + "\n" + str(hours))
         with self.lock, self.repo.connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             self.invitation_manager(connection, user["id"], workspace_id)
@@ -1148,10 +1341,10 @@ class Service:
                 raise BizError(409, "INVITATION_ALREADY_CREATED", "邀请已生成，链接仅首次显示；需要时请另行生成")
             token, invitation_id, stamp = secrets.token_urlsafe(32), new_id(), now_ms()
             expiry = stamp + hours * 3600000
-            connection.execute("INSERT INTO workspace_invitation (id,workspace_id,creator_id,invitation_hash,request_id,request_hash,is_collaborate,expire_time,create_time,update_time) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            connection.execute("INSERT INTO workspace_invitation (id,workspace_id,creator_id,invitation_hash,request_id,request_hash,member_role,expire_time,create_time,update_time) VALUES (?,?,?,?,?,?,?,?,?,?)",
                                (db_id(invitation_id), db_id(workspace_id), db_id(user["id"]), digest(token), request_id,
-                                fingerprint, int(collaborate), expiry, stamp, stamp))
-            return {"id": invitation_id, "workspaceId": workspace_id, "collaborate": collaborate,
+                                fingerprint, role, expiry, stamp, stamp))
+            return {"id": invitation_id, "workspaceId": workspace_id, "memberRole": role,
                     "expireTime": expiry, "createTime": stamp, "isActive": True,
                     "inviteUrl": self.config.public_origin + "/baba-share/invite.html#invite=" + token}
 
@@ -1172,7 +1365,7 @@ class Service:
             connection.execute("BEGIN IMMEDIATE")
             actor = connection.execute("SELECT id,is_disabled FROM sys_user WHERE id=?", (db_id(user["id"]),)).fetchone()
             require(actor and not actor["is_disabled"], 401, "AUTH_REQUIRED", "账号已失效")
-            row = connection.execute("SELECT workspace_id,creator_id,is_collaborate FROM workspace_invitation WHERE invitation_hash=? AND expire_time>?",
+            row = connection.execute("SELECT workspace_id,creator_id,member_role FROM workspace_invitation WHERE invitation_hash=? AND expire_time>?",
                                      (digest(token), now_ms())).fetchone()
             require(row, 404, "INVITATION_INVALID", "邀请不存在或已失效")
             workspace_id = str(uuid.UUID(bytes=row["workspace_id"]))
@@ -1183,38 +1376,41 @@ class Service:
             workspace = connection.execute("SELECT owner_id FROM project_workspace WHERE id=?", (row["workspace_id"],)).fetchone()
             if workspace["owner_id"] != actor["id"]:
                 stamp = now_ms()
-                connection.execute("INSERT INTO workspace_member (id,workspace_id,user_id,is_collaborate,create_time,update_time) VALUES (?,?,?,?,?,?) ON CONFLICT(workspace_id,user_id) DO NOTHING",
-                                   (db_id(new_id()), row["workspace_id"], actor["id"], row["is_collaborate"], stamp, stamp))
+                connection.execute("INSERT INTO workspace_member (id,workspace_id,user_id,member_role,create_time,update_time) VALUES (?,?,?,?,?,?) ON CONFLICT(workspace_id,user_id) DO NOTHING",
+                                   (db_id(new_id()), row["workspace_id"], actor["id"], row["member_role"], stamp, stamp))
             return {"workspaceId": workspace_id}
 
     def members(self, user, workspace_id):
         workspace, _, _ = self.access(user, workspace_id)
-        rows = self.repo.all("SELECT t1." + USER_COLUMNS.replace(",", ",t1.") + ",t2.is_collaborate FROM sys_user AS t1 JOIN workspace_member AS t2 ON t2.user_id=t1.id WHERE t2.workspace_id=? AND (? IS NULL OR t1.id<>?) ORDER BY t1.create_time",
+        rows = self.repo.all("SELECT t1." + USER_COLUMNS.replace(",", ",t1.") + ",t2.member_role FROM sys_user AS t1 JOIN workspace_member AS t2 ON t2.user_id=t1.id WHERE t2.workspace_id=? AND (? IS NULL OR t1.id<>?) ORDER BY t1.create_time",
                              (db_id(workspace_id), db_id(workspace["owner_id"]) if workspace["owner_id"] else None,
                               db_id(workspace["owner_id"]) if workspace["owner_id"] else None))
         owner = self.repo.user(workspace["owner_id"]) if workspace["owner_id"] else None
         result = []
         if owner:
-            result.append({**self.user_view(owner), "userId": owner["id"], "collaborate": True, "isOwner": True})
-        result.extend({**self.user_view(row), "userId": row["id"], "collaborate": bool(row["is_collaborate"]), "isOwner": row["id"] == workspace["owner_id"]} for row in rows)
+            result.append({**self.user_view(owner, include_quota=False), "userId": owner["id"], "memberRole": "manager", "isOwner": True})
+        result.extend({**self.user_view(row, include_quota=False), "userId": row["id"], "memberRole": row["member_role"], "isOwner": row["id"] == workspace["owner_id"]} for row in rows)
         return result
 
     def member_change(self, user, body):
         workspace_id = body.get("workspaceId")
         with self.lock:
-            self.access(user, workspace_id, manage=True, write=True)
+            workspace, _, _ = self.access(user, workspace_id, manage=True, write=True)
             target = self.repo.user(body["userId"]) if body.get("userId") else self.repo.user_by_name(body.get("userName", ""))
             require(target, 404, "USER_NOT_EXIST", "受邀账号不存在")
-            collaborate = body.get("collaborate", False)
-            require(isinstance(collaborate, bool))
+            require(target["id"] != workspace["owner_id"], 403, "PERMISSION_DENIED", "不能修改工作区所有者权限")
+            role = body.get("memberRole", "viewer")
+            require("collaborate" not in body and role in ("viewer", "editor", "manager"))
             stamp = now_ms()
-            self.repo.execute("INSERT INTO workspace_member (id,workspace_id,user_id,is_collaborate,create_time,update_time) VALUES (?,?,?,?,?,?) ON CONFLICT(workspace_id,user_id) DO UPDATE SET is_collaborate=excluded.is_collaborate,update_time=excluded.update_time",
-                              (db_id(new_id()), db_id(workspace_id), db_id(target["id"]), int(collaborate), stamp, stamp))
-            return {**self.user_view(target), "userId": target["id"], "collaborate": collaborate}
+            self.repo.execute("INSERT INTO workspace_member (id,workspace_id,user_id,member_role,create_time,update_time) VALUES (?,?,?,?,?,?) ON CONFLICT(workspace_id,user_id) DO UPDATE SET member_role=excluded.member_role,update_time=excluded.update_time",
+                              (db_id(new_id()), db_id(workspace_id), db_id(target["id"]), role, stamp, stamp))
+            return {**self.user_view(target, include_quota=False), "userId": target["id"], "memberRole": role}
 
     def member_delete(self, user, workspace_id, user_id):
-        self.access(user, workspace_id, manage=True, write=True)
-        self.repo.execute("DELETE FROM workspace_member WHERE workspace_id=? AND user_id=?", (db_id(workspace_id), db_id(user_id)))
+        with self.lock:
+            workspace, _, _ = self.access(user, workspace_id, manage=True, write=True)
+            require(user_id != workspace["owner_id"], 403, "PERMISSION_DENIED", "不能移除工作区所有者")
+            self.repo.execute("DELETE FROM workspace_member WHERE workspace_id=? AND user_id=?", (db_id(workspace_id), db_id(user_id)))
         return {}
 
     def disk_path(self, workspace_id, path):
@@ -1243,9 +1439,8 @@ class Service:
                             403, "UNSAFE_PATH", "目录包含符号链接或目录联接")
 
     def node_writable(self, user, workspace_id, node):
-        _, manager, collaborate = self.access(user, workspace_id)
-        user = self.repo.user(user["id"])
-        return bool(user and not user["is_disabled"]) and user["user_role"] in ("admin", "editor") and (manager or collaborate or not node or node["owner_id"] == user["id"])
+        _, manager, role = self.access(user, workspace_id)
+        return manager or role == "editor" and (not node or node["owner_id"] == user["id"])
 
     def check_write(self, user, workspace_id, path, recursive=False):
         self.access(user, workspace_id, write=True)
@@ -1254,7 +1449,7 @@ class Service:
             if node:
                 require(self.node_writable(user, workspace_id, node), 403, "FOREIGN_CONTENT", "操作将影响他人的内容")
 
-    def ensure_parents(self, user, workspace_id, path):
+    def ensure_parents(self, user, workspace_id, path, connection=None, created=None):
         parts = PurePosixPath(path).parts
         for index in range(1, len(parts)):
             relative = "/".join(parts[:index])
@@ -1262,13 +1457,16 @@ class Service:
             require(not disk.exists() or disk.is_dir(), 409, "PATH_CONFLICT", "父路径不是目录")
             if not disk.exists():
                 disk.mkdir()
-                self.record_node(user, workspace_id, relative, "folder")
+                if created is not None:
+                    created.append(disk)
+                self.record_node(user, workspace_id, relative, "folder", connection)
 
     def record_node(self, user, workspace_id, path, kind, connection=None):
         stamp = now_ms()
         execute = connection.execute if connection is not None else self.repo.execute
-        execute("INSERT INTO workspace_node (id,workspace_id,node_path,node_kind,owner_id,create_time,update_time) VALUES (?,?,?,?,?,?,?) ON CONFLICT(workspace_id,node_path) DO UPDATE SET update_time=excluded.update_time",
-                (db_id(new_id()), db_id(workspace_id), path, kind, db_id(user["id"]), stamp, stamp))
+        size = self.disk_path(workspace_id, path).stat().st_size if kind == "file" else 0
+        execute("INSERT INTO workspace_node (id,workspace_id,node_path,node_kind,owner_id,size_bytes,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(workspace_id,node_path) DO UPDATE SET size_bytes=excluded.size_bytes,update_time=excluded.update_time",
+                (db_id(new_id()), db_id(workspace_id), path, kind, db_id(user["id"]), size, stamp, stamp))
 
     def listing(self, workspace_id, path, user=None, page_index=1, page_size=20, search="", sort="name", order="asc"):
         path = clean_path(path)
@@ -1297,29 +1495,43 @@ class Service:
                             "canWrite": bool(user and self.node_writable(user, workspace_id, node)),
                             "updateTime": node["update_time"]})
         entry = self.repo.entry_node(workspace_id, path)
+        if user:
+            self.onboarding_visited(user, workspace_id)
         return {"path": path, "entries": entries, "entryPath": entry["node_path"] if entry else None,
                 "pageIndex": page_index, "pageSize": page_size, "totalCount": total,
                 "totalPage": (total + page_size - 1) // page_size, "data": entries}
 
     def folder_create(self, user, body):
         workspace_id, path = body.get("workspaceId"), clean_path(body.get("path"), False)
-        with self.lock:
+        with self.lock, self.repo.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             self.check_write(user, workspace_id, path)
             disk = self.disk_path(workspace_id, path)
             require(not disk.exists() or disk.is_dir(), 409, "PATH_CONFLICT", "路径已被文件占用")
-            self.ensure_parents(user, workspace_id, path)
-            if not disk.exists():
-                disk.mkdir()
-                self.record_node(user, workspace_id, path, "folder")
+            created = []
+            try:
+                self.ensure_parents(user, workspace_id, path, connection, created)
+                if not disk.exists():
+                    disk.mkdir()
+                    created.append(disk)
+                    self.record_node(user, workspace_id, path, "folder", connection)
+                if created:
+                    self.onboarding_record(connection, user, "create_folder")
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                for directory in reversed(created):
+                    directory.rmdir()
+                raise
             return {"path": path}
 
     def file_write(self, user, body):
         content = body.get("content")
         require(isinstance(content, str))
         return self.upload(user, {"workspaceId": body.get("workspaceId"), "path": "", "conflictPolicy": "overwrite",
-                                 "files": [{"path": body.get("path"), "contentBase64": base64.b64encode(content.encode()).decode()}]})
+                                 "files": [{"path": body.get("path"), "contentBase64": base64.b64encode(content.encode()).decode()}]}, record_upload=False)
 
-    def upload(self, user, body):
+    def upload(self, user, body, *, record_upload=True):
         workspace_id, root = body.get("workspaceId"), clean_path(body.get("path", ""))
         files, policy, request_id = body.get("files"), body.get("conflictPolicy", "ask"), body.get("requestId")
         require(isinstance(policy, str) and policy in ("ask", "overwrite", "rename"))
@@ -1405,6 +1617,17 @@ class Service:
                 reserved.add(os.path.normcase(target).replace("\\", "/"))
                 targets.append((target, disk, content))
                 result["files"].append({"sourcePath": source, "targetPath": target, "overwritten": overwritten})
+            deltas = {}
+            for path, disk, content in targets:
+                node = connection.execute("SELECT owner_id,node_kind,size_bytes FROM workspace_node WHERE workspace_id=? AND node_path=?",
+                                          (db_id(workspace_id), path)).fetchone()
+                require(not node or node["node_kind"] == "file", 409, "STORAGE_INCONSISTENT", "文件与节点类型不一致")
+                owner_id = str(uuid.UUID(bytes=node["owner_id"])) if node and node["owner_id"] else None if node else user["id"]
+                delta = deltas.setdefault(owner_id, [0, 0])
+                delta[0] += 0 if node else 1
+                delta[1] += len(content) - (node["size_bytes"] if node else 0)
+            for owner_id, (file_delta, bytes_delta) in deltas.items():
+                self.check_quota(connection, owner_id, file_delta, bytes_delta)
             result["count"] = len(targets)
             created_directories, replaced, staged = [], [], []
             # 同文件系统独立暂存；全部内容和旧文件备份就绪后才改目标。
@@ -1436,7 +1659,11 @@ class Service:
                         connection.execute("INSERT INTO upload_request (id,user_id,workspace_id,request_id,request_hash,response_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?)",
                                            (db_id(new_id()), db_id(user["id"]), db_id(workspace_id), request_id, fingerprint,
                                             json.dumps(result, ensure_ascii=False), stamp, stamp))
-                    # 显式commit置于补偿范围内，节点和幂等结果同事务提交。
+                    if created_directories:
+                        self.onboarding_record(connection, user, "create_folder")
+                    if record_upload:
+                        self.onboarding_record(connection, user, "upload_file")
+                    # 显式commit置于补偿范围内，节点、任务和幂等结果同事务提交。
                     connection.commit()
                 except Exception:
                     recovery_errors = []
@@ -1527,14 +1754,28 @@ class Service:
             require((kind == "folder") == disk.is_dir(), 400, "PATH_KIND_INVALID", "文件类型不匹配")
             require(not target.exists(), 409, "PATH_CONFLICT", "目标路径已存在")
             self.scan_safe(disk)
-            self.ensure_parents(user, workspace_id, new_path)
             nodes = self.repo.nodes(workspace_id, path)
-            disk.rename(target)
             with self.repo.connection() as connection:
-                for node in nodes:
-                    replacement = new_path + node["node_path"][len(path):]
-                    connection.execute("UPDATE workspace_node SET node_path=?,update_time=? WHERE id=?", (replacement, now_ms(), db_id(node["id"])))
-                self.invalidate_roots(connection, workspace_id, path)
+                connection.execute("BEGIN IMMEDIATE")
+                created, moved = [], False
+                try:
+                    self.ensure_parents(user, workspace_id, new_path, connection, created)
+                    disk.rename(target)
+                    moved = True
+                    for node in nodes:
+                        replacement = new_path + node["node_path"][len(path):]
+                        connection.execute("UPDATE workspace_node SET node_path=?,update_time=? WHERE id=?", (replacement, now_ms(), db_id(node["id"])))
+                    self.invalidate_roots(connection, workspace_id, path)
+                    if created:
+                        self.onboarding_record(connection, user, "create_folder")
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+                    if moved:
+                        target.rename(disk)
+                    for directory in reversed(created):
+                        directory.rmdir()
+                    raise
             return {"path": new_path}
 
     def share_view(self, row):
@@ -1568,10 +1809,12 @@ class Service:
         return [self.share_view(row) for row in rows]
 
     def share_delete(self, user, share_id):
-        share = self.repo.one("SELECT " + SHARE_COLUMNS + " FROM folder_share WHERE id=?", (db_id(share_id),))
-        if share:
-            require(share["owner_id"] == user["id"] or user["user_role"] == "admin", 403, "PERMISSION_DENIED", "无权删除分享")
-            self.repo.execute("DELETE FROM folder_share WHERE id=?", (db_id(share_id),))
+        with self.lock:
+            share = self.repo.one("SELECT " + SHARE_COLUMNS + " FROM folder_share WHERE id=?", (db_id(share_id),))
+            if share:
+                _, manager, _ = self.access(user, share["workspace_id"], write=True)
+                require(share["owner_id"] == user["id"] or manager, 403, "PERMISSION_DENIED", "无权删除分享")
+                self.repo.execute("DELETE FROM folder_share WHERE id=?", (db_id(share_id),))
         return {}
 
     def share_access(self, token):
@@ -1614,17 +1857,28 @@ class Service:
         workspace_id, path = body.get("workspaceId"), clean_path(body.get("path", ""))
         with self.lock:
             self.access(user, workspace_id)
-            listing = self.listing(workspace_id, path, user)
+            require(set(body) <= {"workspaceId", "path"})
+            disk = self.disk_path(workspace_id, path)
+            require(disk.exists(), 404, "FILE_NOT_EXIST", "预览目标不存在")
+            entry = path if disk.is_file() else self.listing(workspace_id, path)["entryPath"]
+            preview_path = entry
+            if preview_path:
+                require(self.disk_path(workspace_id, preview_path).is_file(), 404, "FILE_NOT_EXIST", "预览主文件不存在")
             token, stamp = secrets.token_urlsafe(32), now_ms()
             expiry = stamp + self.config.ticket_seconds * 1000
             self.repo.execute("DELETE FROM preview_ticket WHERE expire_time<=?", (stamp,))
             self.repo.execute("INSERT INTO preview_ticket (id,ticket_hash,workspace_id,user_id,root_path,expire_time,create_time,update_time) VALUES (?,?,?,?,?,?,?,?)",
                               (db_id(new_id()), digest(token), db_id(workspace_id), db_id(user["id"]), path, expiry, stamp, stamp))
-            entry = listing["entryPath"]
-            relative_entry = entry[len(path) + 1:] if path and entry else entry
+            with self.repo.connection() as connection:
+                connection.execute("DELETE FROM onboarding_preview_target WHERE expire_time<=?", (stamp,))
+                if preview_path:
+                    connection.execute("INSERT INTO onboarding_preview_target (id,user_id,ticket_hash,workspace_id,preview_path,expire_time,create_time,update_time) VALUES (?,?,?,?,?,?,?,?)",
+                                       (db_id(new_id()), db_id(user["id"]), digest(token), db_id(workspace_id), preview_path, expiry, stamp, stamp))
+            relative_entry = PurePosixPath(path).name if disk.is_file() else (entry[len(path) + 1:] if path and entry else entry)
             preview_base = self.config.public_origin + "/baba-share/preview/p/" + token + "/"
             return {"previewUrl": preview_base + quote(relative_entry or "", safe="/"),
-                    "previewBaseUrl": preview_base, "expireTime": expiry, "entryPath": entry}
+                    "previewBaseUrl": preview_base, "expireTime": expiry, "entryPath": entry,
+                    "onboardingTicket": token}
 
     def preview_resource(self, kind, token, relative):
         relative = clean_path(relative.rstrip("/"))
@@ -1637,6 +1891,12 @@ class Service:
             require(user and not user["is_disabled"], 404, "PREVIEW_EXPIRED", "预览凭据已失效")
             self.access(user, source["workspace_id"])
         root = source["root_path"]
+        root_disk = self.disk_path(source["workspace_id"], root)
+        if kind == "p" and root_disk.is_file():
+            if not relative or relative == PurePosixPath(root).name:
+                return root_disk, None
+            root = str(PurePosixPath(root).parent)
+            root = "" if root == "." else root
         path = root + "/" + relative if root and relative else root or relative
         disk = self.disk_path(source["workspace_id"], path)
         if disk.is_dir():

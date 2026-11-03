@@ -9,6 +9,14 @@ const source = (name) => fs.readFileSync(path.join(assets, name), "utf8");
 const accents = ["blue", "green", "purple", "red", "orange", "teal"];
 const locales = ["zh-CN", "en-US", "ar-SA"];
 const flush = () => new Promise((resolve) => setImmediate(resolve));
+function allowSharePreviewFetch(app) {
+  app.context.fetch = async (url, options) => {
+    assert.match(String(url), /^http:\/\/127\.0\.0\.1\/baba-share\/preview\/s\/test\/(?:index|other)\.html$/);
+    assert.equal(options.credentials, "omit");
+    assert.equal(options.redirect, "error");
+    return { ok: true, headers: { get: () => null }, arrayBuffer: async () => new TextEncoder().encode("<!doctype html><p>preview</p>").buffer };
+  };
+}
 
 function realm({ stored = "{}", blocked = false, page = "account.html" } = {}) {
   const nodes = [], events = new Map(), warnings = [], writes = [];
@@ -77,6 +85,7 @@ function realm({ stored = "{}", blocked = false, page = "account.html" } = {}) {
     close() { this.open = false; this.fire("close"); }
     get isConnected() { return document.body.contains(this); }
     get childNodes() { return this.children; }
+    get lastChild() { return this.children.at(-1); }
     replaceWith() {}
     get elements() {
       const inputs = [];
@@ -137,7 +146,7 @@ function realm({ stored = "{}", blocked = false, page = "account.html" } = {}) {
     },
     console: { warn: (...args) => warnings.push(args), error: (...args) => warnings.push(args) },
     location: new URL("http://127.0.0.1/baba-share/" + page),
-    history: { replaceState() {} },
+    history: { state: null, replaceState(state, _, url) { this.state = state; context.location = new URL(url); } },
     localStorage: {
       getItem() { if (blocked) throw new Error("禁用存储"); return stored; },
       setItem(key, value) { if (blocked) throw new Error("禁用存储"); writes.push([key, value]); },
@@ -166,7 +175,7 @@ function controls(app) {
   return holder.children;
 }
 
-async function shell(app, role = "user") {
+async function shell(app, role = "editor") {
   for (const id of ["brand-home", "page-frame", "shell-controls", "new-workspace-icon", "logout-icon", "workspace-nav", "account-nav", "new-workspace", "shell-account", "logout", "new-workspace"]) {
     const node = new app.Element(id === "page-frame" ? "iframe" : "div");
     node.id = id;
@@ -240,7 +249,7 @@ test("共享表单等待防重复与Esc取消、失败保留草稿、成功关�
   app.context.AppPage = { setDirty(value) { states.push(value); } };
   let release, reject, calls = 0;
   const result = UI.formDialog("编辑", [{ key: "name", value: "初始" }], () => { calls++; return new Promise((ok, fail) => { release = ok; reject = fail; }); }, { dirty: true });
-  const popup = app.nodes.findLast((node) => node.tag === "dialog"), form = popup.children[1];
+  const popup = app.nodes.findLast((node) => node.tag === "dialog"), form = popup.querySelector("form");
   const input = form.elements.namedItem("name"); input.value = "草稿"; form.fire("input");
   const footer = form.children.at(-1), status = footer.children[0], save = footer.children[1].children[1];
   const pending = form.fire("submit", { preventDefault() {} });
@@ -300,12 +309,12 @@ test("管理员设置菜单与初始固定路由同步，非管理员无菜单�
   assert.equal(new URL(admin.context.UI.routeUrl("settings")).pathname, "/baba-share/settings.html");
   assert.throws(() => admin.context.UI.routeUrl("https://evil.invalid"), /ROUTE_NOT_ALLOWED/);
   const viewer = realm({ page: "index.html?route=settings" });
-  const deniedFrame = await shell(viewer, "viewer");
+  const deniedFrame = await shell(viewer, "editor");
   assert.equal(deniedFrame.src, undefined);
   assert.equal(viewer.document.querySelector("#account-nav").children.some((node) => node.attrs["aria-label"] === viewer.context.I18n.t("settings")), false);
 });
 
-async function attach(host, frame, child, wire = {}) {
+async function attach(host, frame, child, wire = {}, start = () => child.context.UI.page()) {
   wire.child = child;
   wire.hostProxy ||= {
     location: host.context.location,
@@ -324,10 +333,11 @@ async function attach(host, frame, child, wire = {}) {
   child.run("bridge-core.js");
   child.run("page-bridge.js");
   child.run("common.js");
-  const bridge = child.context.UI.page();
+  const started = start();
+  const bridge = child.context.AppPage;
   await bridge.ready;
   await flush();
-  return { bridge, wire };
+  return { bridge, wire, started };
 }
 
 for (const accent of accents) {
@@ -509,8 +519,9 @@ test("真实登录与分享脚本执行换色，不向原型沙箱发送上下�
       if (name === "shareDetail") return { share: { expireTime: null }, previewBaseUrl: "/baba-share/preview/s/test/", listing: { entries: [], pageIndex: 1, totalPage: 1, totalCount: 0, entryPath: "index.html" } };
       throw new Error("不应写入业务数据 " + name);
     };
-    if (page === "share") app.run("preview.js");
+    if (page === "share") { app.context.location.pathname = "/baba-share/s/test"; allowSharePreviewFetch(app); app.run("preview.js"); }
     await app.run(page + ".js");
+    await flush();
     const holder = app.document.querySelector(page === "auth" ? "#auth-settings" : "#share-controls");
     const accent = holder.children.find((node) => node.dataset?.i18nLabel === "accent");
     assert.equal(accent.value, "green");
@@ -528,8 +539,9 @@ test("真实登录与分享脚本执行换色，不向原型沙箱发送上下�
   }
 });
 
-async function sharePreview(mode = "native") {
-  const app = realm({ page: "share.html" });
+async function sharePreview(mode = "native", page = "s/test") {
+  const app = realm({ page });
+  const shareRequests = [];
   const get = (id) => app.document.querySelector("#" + id);
   for (const id of ["share-shell", "share-sidebar", "share-controls", "share-layout", "preview-actions", "share-stage", "shared-frame", "share-state", "share-status", "share-tree", "share-title", "share-folder-title", "share-expiry", "share-current"]) {
     const node = new app.Element("div");
@@ -562,13 +574,19 @@ async function sharePreview(mode = "native") {
   Object.defineProperty(get("shared-frame"), "contentDocument", { get() { throw new Error("禁止读取原型DOM"); } });
   get("shared-frame").contentWindow = { postMessage() { throw new Error("禁止向原型注入消息"); } };
   app.run("common.js");
-  app.context.API = async (name) => {
+  app.context.API = async (name, options) => {
     assert.equal(name, "shareDetail");
+    shareRequests.push(options);
     return { share: { expireTime: null }, previewBaseUrl: "/baba-share/preview/s/test/", listing: { entries: [{ name: "index.html", path: "index.html", kind: "file" }, { name: "other.html", path: "other.html", kind: "file" }], pageIndex: 1, totalPage: 1, totalCount: 2, entryPath: "index.html" } };
   };
+  allowSharePreviewFetch(app);
   app.run("preview.js");
   await app.run("share.js");
+  await flush();
+  app.shareRequests = shareRequests;
+  app.get = get;
   app.currentFrame = () => app.nodes.findLast((node) => node.tag === "iframe");
+  if (!app.currentFrame()) return app;
   Object.defineProperty(app.currentFrame(), "contentDocument", { get() { throw new Error("禁止读取原型DOM"); } });
   app.currentFrame().contentWindow = { postMessage() { throw new Error("禁止向原型注入消息"); } };
   app.get = get;
@@ -582,6 +600,25 @@ async function sharePreview(mode = "native") {
   app.resolveRequest = () => resolveRequest();
   return app;
 }
+
+test("分享仅从正式路径读取token，保留file定位并忽略查询token", async () => {
+  const app = await sharePreview("native", "s/path-token?token=ignored&file=other.html");
+  assert.equal(app.shareRequests.length, 1);
+  assert.equal(app.shareRequests[0].query.token, "path-token");
+  assert.equal(app.get("share-current").textContent, "other.html");
+  assert.equal(new URL(app.currentFrame().src).pathname, "/baba-share/preview/s/test/other.html");
+  app.get("share-tree").children[0].children[0].fire("click");
+  assert.equal(app.context.location.pathname, "/baba-share/s/path-token");
+  assert.equal(app.context.location.searchParams.get("file"), "index.html");
+  for (const page of ["share.html?token=legacy&file=other.html", "s/?token=legacy", "s/test/extra?token=legacy"]) {
+    const invalid = await sharePreview("native", page);
+    assert.equal(invalid.shareRequests.length, 0, page);
+    assert.equal(invalid.currentFrame(), undefined);
+    assert.equal(invalid.get("share-state").hidden, false);
+    assert(invalid.get("share-state").children.some((node) => node.tag === "button"));
+  }
+  assert.doesNotMatch(source("share.js"), /searchParams\.get\(["']token["']\)/);
+});
 
 test("分享全屏请求外层容器、默认收起目录、退出恢复目录与焦点", async () => {
   for (const initiallyCollapsed of [false, true]) {
@@ -697,6 +734,7 @@ test("触屏点击与键盘目录开关保持全屏、隐藏焦点回入口，�
   const item = app.get("share-tree").children[1].children[0];
   item.focus();
   item.fire("click");
+  await flush();
   assert(app.isImmersive());
   const previous = app.nodes.filter((node) => node.tag === "iframe").at(-2);
   assert.equal(previous.src, "about:blank", "切换必须停止旧原型");
@@ -834,6 +872,24 @@ test("剪贴板缺失或拒绝时只显示手动复制，不宣称成功，清�
   }
 });
 
+test("MCP三语复制说明先读取目录树并确认目标，不承诺客户端统一树UI", () => {
+  const app = copyRuntime(); app.run("mcp-help.js");
+  for (const locale of ["zh-CN", "en-US", "ar-SA"]) {
+    app.context.I18n.apply({ locale, theme: "dark" });
+    const text = app.context.McpHelp.instructions("bsk_private_test");
+    for (const item of ["initialize", "directory_tree {}", "complete=false", "relativePath", "treeToken", "targetId", "memberRole", "viewer/editor/manager", "NULL", "Base64"]) assert(text.includes(item), locale + " " + item);
+    assert(text.includes(app.context.I18n.t("mcpDirectorySelection")));
+    assert.notEqual(app.context.I18n.t("mcpDirectorySelection"), "mcpDirectorySelection");
+    assert.doesNotMatch(text, /19 tools|19 个工具|19 أداة/);
+  }
+  assert.equal(app.context.I18n.ctx.dir, "rtl");
+  app.context.I18n.apply({ locale: "zh-CN" });
+  const text = app.context.McpHelp.instructions("bsk_private_test");
+  assert.match(text, /编号和完整路径.*无需手输路径/);
+  assert.match(text, /不保证所有客户端均有可点选树 UI/);
+  assert.match(text, /过期.*刷新目录树并重新确认/);
+});
+
 test("恢复MCP密钥复制同样返回真实结果并保留动态origin与手动敏感清理", async () => {
   const app = copyRuntime(), { UI } = app.context;
   app.run("mcp-help.js");
@@ -909,6 +965,84 @@ test("独立子页品牌导航保留未保存确认且只回固定母版首页",
   bridge.setDirty(false);
   assert.equal(await home.fire("click", { button: 0, preventDefault() {} }), true);
   assert.equal(new URL(app.context.location.href).pathname, "/baba-share/index.html");
+});
+
+test("母版新建工作区经真实离页协议转入子页，不创建母版表单且取消保留原页", async () => {
+  const app = realm({ page: "index.html" });
+  const frame = await shell(app), child = realm();
+  const { bridge } = await attach(app, frame, child);
+  const original = frame.src, create = app.document.querySelector("#new-workspace");
+  bridge.setDirty(true);
+  const refused = create.fire("click"); await flush();
+  child.nodes.find((node) => node.tag === "dialog" && node.open).close();
+  assert.equal(await refused, false);
+  assert.equal(frame.src, original);
+  assert.equal(app.nodes.some((node) => node.tag === "dialog"), false);
+  bridge.setDirty(false);
+  assert.equal(await create.fire("click"), true);
+  const target = new URL(frame.src);
+  assert.equal(target.pathname, "/baba-share/workspace.html");
+  assert.equal(target.searchParams.get("action"), "create");
+  assert.equal(app.nodes.some((node) => node.tag === "dialog"), false);
+  const viewer = realm({ page: "index.html" }), viewerFrame = await shell(viewer, "");
+  const previous = viewerFrame.src;
+  await viewer.document.querySelector("#new-workspace").fire("click");
+  assert.equal(viewer.document.querySelector("#new-workspace").hidden, true);
+  assert.equal(viewerFrame.src, previous);
+});
+
+test("侧栏新建经过完整工作区脚本和真实握手后打开子页表单且仅消费一次", async () => {
+  const host = realm({ page: "index.html" }), frame = await shell(host, "editor");
+  await host.document.querySelector("#new-workspace").fire("click");
+  assert.equal(new URL(frame.src).searchParams.get("action"), "create");
+  const child = realm({ page: "workspace.html" + new URL(frame.src).search });
+  const workspaceHtml = fs.readFileSync(path.join(assets, "../workspace.html"), "utf8");
+  for (const match of workspaceHtml.matchAll(/\bid="([^"]+)"/g)) {
+    const node = new child.Element("div"); node.id = match[1]; child.document.body.append(node);
+  }
+  const requests = [];
+  child.context.API = async (name, options = {}) => {
+    requests.push({ name, method: options.method || "GET" });
+    assert.equal(options.method || "GET", "GET", "初始化及取消不能写真实数据");
+    if (name === "me") return { id: "user", role: "editor" };
+    if (name === "workspaces") return [];
+    throw new Error("意外的 API " + name);
+  };
+  child.document.readyState = "loading";
+  const { bridge, wire, started } = await attach(host, frame, child, {}, () => {
+    child.run("pagination.js");
+    const pending = child.run("workspace.js");
+    assert.equal(requests.length, 0, "真实握手前不应加载业务或消费导航参数");
+    assert.equal(child.context.location.searchParams.get("action"), "create");
+    queueMicrotask(() => {
+      child.document.readyState = "complete";
+      child.dispatch("load", {});
+    });
+    return pending;
+  });
+  assert.equal(bridge.embedded, true);
+  assert.equal(child.context.location.searchParams.has("action"), false);
+  const drawer = child.nodes.find((node) => node.tag === "dialog" && node.open);
+  assert(drawer, "完成真实桥接初始化后必须打开新建抽屉");
+  assert.equal(drawer.className.includes("form-drawer"), true);
+  assert.equal(host.nodes.some((node) => node.tag === "dialog"), false);
+  drawer.close(); await started;
+  assert.equal(requests.length, 2);
+  bridge.destroy();
+  const reloaded = realm({ page: "workspace.html" + child.context.location.search });
+  for (const match of workspaceHtml.matchAll(/\bid="([^"]+)"/g)) {
+    const node = new reloaded.Element("div"); node.id = match[1]; reloaded.document.body.append(node);
+  }
+  reloaded.context.API = child.context.API;
+  const again = await attach(host, frame, reloaded, wire, () => {
+    reloaded.run("pagination.js");
+    return reloaded.run("workspace.js");
+  });
+  await again.started;
+  assert.equal(again.bridge.embedded, true);
+  assert.equal(reloaded.nodes.some((node) => node.tag === "dialog" && node.open), false);
+  assert.equal(requests.length, 4);
+  again.bridge.destroy(); host.dispatch("pagehide", {});
 });
 
 test("母版品牌普通点击走真实beforeLeave导航，取消保留当前页且修饰键维持原生链接", async () => {

@@ -3,7 +3,8 @@ import secrets
 import sqlite3
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
+from pathlib import Path
 
 
 def now_ms():
@@ -30,16 +31,23 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS sys_user (
  id BLOB PRIMARY KEY, user_name TEXT NOT NULL COLLATE NOCASE UNIQUE,
  nickname TEXT NOT NULL, password_hash TEXT NOT NULL,
- user_role TEXT NOT NULL, is_disabled INTEGER NOT NULL DEFAULT 0,
+ user_role TEXT NOT NULL CHECK(user_role IN ('admin','editor')), is_disabled INTEGER NOT NULL DEFAULT 0,
+ email TEXT COLLATE NOCASE, is_email_verified INTEGER NOT NULL DEFAULT 0,
+ file_count_limit BIGINT CHECK(file_count_limit>=0), storage_bytes_limit BIGINT CHECK(storage_bytes_limit>=0),
  create_time BIGINT NOT NULL, update_time BIGINT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uk_sys_user_email ON sys_user(email);
 CREATE TABLE IF NOT EXISTS app_setting (
  id BLOB PRIMARY KEY, is_registration_enabled INTEGER NOT NULL DEFAULT 0,
+ is_email_registration_enabled INTEGER NOT NULL DEFAULT 0,
+ registration_revision INTEGER NOT NULL DEFAULT 0, mail_settings TEXT NOT NULL DEFAULT '{}',
+ default_file_count_limit BIGINT NOT NULL DEFAULT 0 CHECK(default_file_count_limit>=0),
+ default_storage_bytes_limit BIGINT NOT NULL DEFAULT 0 CHECK(default_storage_bytes_limit>=0),
  create_time BIGINT NOT NULL, update_time BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS email_activation (
  id BLOB PRIMARY KEY, email_address TEXT NOT NULL COLLATE NOCASE UNIQUE,
- nickname TEXT NOT NULL, activation_hash TEXT NOT NULL UNIQUE,
+ user_name TEXT NOT NULL COLLATE NOCASE, nickname TEXT NOT NULL, activation_hash TEXT NOT NULL UNIQUE,
  expire_time BIGINT NOT NULL, create_time BIGINT NOT NULL, update_time BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_email_activation_expire_time ON email_activation(expire_time);
@@ -66,8 +74,9 @@ CREATE INDEX IF NOT EXISTS idx_auth_session_user_id ON auth_session(user_id);
 CREATE TABLE IF NOT EXISTS auth_mcp_key (
  id BLOB PRIMARY KEY, user_id BLOB NOT NULL, key_name TEXT NOT NULL,
  key_prefix TEXT NOT NULL, key_hash TEXT NOT NULL, request_id TEXT NOT NULL,
- request_hash TEXT NOT NULL, expire_time BIGINT, revoked_time BIGINT,
- mcp_derivation_version TEXT, mcp_derivation_nonce TEXT,
+ request_hash TEXT NOT NULL, expire_time BIGINT,
+ mcp_derivation_version TEXT NOT NULL CHECK(mcp_derivation_version='hmac-sha256-v1'),
+ mcp_derivation_nonce TEXT NOT NULL CHECK(length(mcp_derivation_nonce)=64 AND mcp_derivation_nonce NOT GLOB '*[^0-9a-f]*'),
  create_time BIGINT NOT NULL, update_time BIGINT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uk_auth_mcp_key_hash ON auth_mcp_key(key_hash);
@@ -81,14 +90,14 @@ CREATE TABLE IF NOT EXISTS project_workspace (
 );
 CREATE TABLE IF NOT EXISTS workspace_member (
  id BLOB PRIMARY KEY, workspace_id BLOB NOT NULL, user_id BLOB NOT NULL,
- is_collaborate INTEGER NOT NULL, create_time BIGINT NOT NULL, update_time BIGINT NOT NULL,
+ member_role TEXT NOT NULL CHECK(member_role IN ('viewer','editor','manager')), create_time BIGINT NOT NULL, update_time BIGINT NOT NULL,
  UNIQUE(workspace_id,user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_workspace_member_user_id ON workspace_member(user_id);
 CREATE TABLE IF NOT EXISTS workspace_invitation (
  id BLOB PRIMARY KEY, workspace_id BLOB NOT NULL, creator_id BLOB NOT NULL,
  invitation_hash TEXT NOT NULL, request_id TEXT NOT NULL, request_hash TEXT NOT NULL,
- is_collaborate INTEGER NOT NULL DEFAULT 0, expire_time BIGINT NOT NULL,
+ member_role TEXT NOT NULL CHECK(member_role IN ('viewer','editor','manager')), expire_time BIGINT NOT NULL,
  create_time BIGINT NOT NULL, update_time BIGINT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uk_workspace_invitation_hash ON workspace_invitation(invitation_hash);
@@ -96,10 +105,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_workspace_invitation_request ON workspace_i
 CREATE INDEX IF NOT EXISTS idx_workspace_invitation_workspace_time ON workspace_invitation(workspace_id,create_time);
 CREATE TABLE IF NOT EXISTS workspace_node (
  id BLOB PRIMARY KEY, workspace_id BLOB NOT NULL, node_path TEXT NOT NULL,
- node_kind TEXT NOT NULL, owner_id BLOB,
+ node_kind TEXT NOT NULL, owner_id BLOB, size_bytes BIGINT NOT NULL DEFAULT 0 CHECK(size_bytes>=0),
  create_time BIGINT NOT NULL, update_time BIGINT NOT NULL,
  UNIQUE(workspace_id,node_path)
 );
+CREATE INDEX IF NOT EXISTS idx_workspace_node_owner_kind ON workspace_node(owner_id,node_kind);
 CREATE TABLE IF NOT EXISTS upload_request (
  id BLOB PRIMARY KEY, user_id BLOB NOT NULL, workspace_id BLOB NOT NULL,
  request_id TEXT NOT NULL, request_hash TEXT NOT NULL, response_json TEXT NOT NULL,
@@ -112,6 +122,31 @@ CREATE TABLE IF NOT EXISTS folder_share (
  create_time BIGINT NOT NULL, update_time BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_folder_share_owner_id ON folder_share(owner_id);
+CREATE TABLE IF NOT EXISTS onboarding_task (
+ id BLOB PRIMARY KEY, user_id BLOB NOT NULL, task_version INTEGER NOT NULL,
+ task_key TEXT NOT NULL CHECK(task_key IN ('enter_workspace','create_folder','upload_file','preview_file','create_mcp_key','mcp_tool_call')),
+ completed_time BIGINT NOT NULL, create_time BIGINT NOT NULL, update_time BIGINT NOT NULL,
+ UNIQUE(user_id,task_version,task_key)
+);
+CREATE TABLE IF NOT EXISTS onboarding_preference (
+ id BLOB PRIMARY KEY, user_id BLOB NOT NULL, task_version INTEGER NOT NULL,
+ is_dismissed INTEGER NOT NULL DEFAULT 0, is_celebration_seen INTEGER NOT NULL DEFAULT 0,
+ create_time BIGINT NOT NULL, update_time BIGINT NOT NULL, UNIQUE(user_id,task_version)
+);
+CREATE TABLE IF NOT EXISTS onboarding_preview_target (
+ id BLOB PRIMARY KEY, user_id BLOB NOT NULL, ticket_hash TEXT NOT NULL UNIQUE,
+ workspace_id BLOB NOT NULL, preview_path TEXT NOT NULL,
+ expire_time BIGINT NOT NULL, create_time BIGINT NOT NULL, update_time BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_onboarding_preview_target_user_id ON onboarding_preview_target(user_id);
+CREATE INDEX IF NOT EXISTS idx_onboarding_preview_target_expire_time ON onboarding_preview_target(expire_time);
+CREATE TABLE IF NOT EXISTS onboarding_preview_proof (
+ id BLOB PRIMARY KEY, user_id BLOB NOT NULL, ticket_hash TEXT NOT NULL UNIQUE,
+ proof_purpose TEXT NOT NULL CHECK(proof_purpose='preview_file'), target_path TEXT NOT NULL DEFAULT '',
+ expire_time BIGINT NOT NULL, create_time BIGINT NOT NULL, update_time BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_onboarding_preview_proof_user_id ON onboarding_preview_proof(user_id);
+CREATE INDEX IF NOT EXISTS idx_onboarding_preview_proof_expire_time ON onboarding_preview_proof(expire_time);
 CREATE TABLE IF NOT EXISTS preview_ticket (
  id BLOB PRIMARY KEY, ticket_hash TEXT NOT NULL UNIQUE, workspace_id BLOB NOT NULL,
  user_id BLOB NOT NULL, root_path TEXT NOT NULL, expire_time BIGINT NOT NULL,
@@ -119,70 +154,38 @@ CREATE TABLE IF NOT EXISTS preview_ticket (
 );
 """
 
-USER_COLUMNS = "id,user_name,nickname,password_hash,user_role,is_disabled,email,is_email_verified,create_time,update_time"
+USER_COLUMNS = "id,user_name,nickname,password_hash,user_role,is_disabled,email,is_email_verified,file_count_limit,storage_bytes_limit,create_time,update_time"
 WORKSPACE_COLUMNS = "id,workspace_name,description,owner_id,creator_id,creator_nickname,create_time,update_time"
-NODE_COLUMNS = "id,workspace_id,node_path,node_kind,owner_id,create_time,update_time"
+NODE_COLUMNS = "id,workspace_id,node_path,node_kind,owner_id,size_bytes,create_time,update_time"
 SHARE_COLUMNS = "id,share_token,workspace_id,owner_id,root_path,expire_time,create_time,update_time"
 
 
 class Repository:
     def __init__(self, path):
         self.path = str(path)
+        self.check_schema()
         with self.connection() as connection:
             connection.executescript(SCHEMA)
-            connection.execute("BEGIN IMMEDIATE")
-            self.migrate_custody(connection)
-            user_columns = {row["name"] for row in connection.execute("PRAGMA table_info(sys_user)")}
-            if "email" not in user_columns:
-                # 旧账号名不能证明邮箱归属；保留登录账号，邮箱迁移为空。
-                connection.execute("ALTER TABLE sys_user ADD COLUMN email TEXT COLLATE NOCASE")
-            if "is_email_verified" not in user_columns:
-                connection.execute("ALTER TABLE sys_user ADD COLUMN is_email_verified INTEGER NOT NULL DEFAULT 0")
-            connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS uk_sys_user_email ON sys_user(email)")
-            activation_columns = {row["name"] for row in connection.execute("PRAGMA table_info(email_activation)")}
-            if "user_name" not in activation_columns:
-                connection.execute("ALTER TABLE email_activation ADD COLUMN user_name TEXT COLLATE NOCASE")
-                # 旧待激活记录缺少独立账号，不能按新契约消费。
-                connection.execute("DELETE FROM email_activation WHERE user_name IS NULL")
-            columns = {row["name"] for row in connection.execute("PRAGMA table_info(auth_mcp_key)")}
-            if "mcp_derivation_version" not in columns:
-                connection.execute("ALTER TABLE auth_mcp_key ADD COLUMN mcp_derivation_version TEXT")
-            if "mcp_derivation_nonce" not in columns:
-                connection.execute("ALTER TABLE auth_mcp_key ADD COLUMN mcp_derivation_nonce TEXT")
-            setting_columns = {row["name"] for row in connection.execute("PRAGMA table_info(app_setting)")}
-            if "is_email_registration_enabled" not in setting_columns:
-                connection.execute("ALTER TABLE app_setting ADD COLUMN is_email_registration_enabled INTEGER NOT NULL DEFAULT 0")
-            if "registration_revision" not in setting_columns:
-                connection.execute("ALTER TABLE app_setting ADD COLUMN registration_revision INTEGER NOT NULL DEFAULT 0")
-            if "mail_settings" not in setting_columns:
-                connection.execute("ALTER TABLE app_setting ADD COLUMN mail_settings TEXT NOT NULL DEFAULT '{}'")
             stamp = now_ms()
             connection.execute("INSERT INTO app_setting (id,is_registration_enabled,create_time,update_time) SELECT ?,0,?,? WHERE NOT EXISTS (SELECT id FROM app_setting)", (db_id(new_id()), stamp, stamp))
 
-    @staticmethod
-    def migrate_custody(connection):
-        columns = {row["name"]: row for row in connection.execute("PRAGMA table_info(project_workspace)")}
-        if "creator_id" not in columns:
-            connection.execute("ALTER TABLE project_workspace ADD COLUMN creator_id BLOB")
-            connection.execute("ALTER TABLE project_workspace ADD COLUMN creator_nickname TEXT NOT NULL DEFAULT ''")
-            connection.execute("UPDATE project_workspace SET creator_id=owner_id,creator_nickname=COALESCE((SELECT nickname FROM sys_user WHERE sys_user.id=project_workspace.owner_id),'') WHERE creator_id IS NULL")
-        if columns["owner_id"]["notnull"]:
-            indexes = [row["sql"] for row in connection.execute("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='project_workspace' AND sql IS NOT NULL")]
-            connection.execute("ALTER TABLE project_workspace RENAME TO project_workspace_custody_old")
-            connection.execute("CREATE TABLE project_workspace (id BLOB PRIMARY KEY,workspace_name TEXT NOT NULL,description TEXT NOT NULL,owner_id BLOB,creator_id BLOB,creator_nickname TEXT NOT NULL DEFAULT '',create_time BIGINT NOT NULL,update_time BIGINT NOT NULL,UNIQUE(owner_id,workspace_name))")
-            connection.execute("INSERT INTO project_workspace (id,workspace_name,description,owner_id,creator_id,creator_nickname,create_time,update_time) SELECT id,workspace_name,description,owner_id,creator_id,creator_nickname,create_time,update_time FROM project_workspace_custody_old")
-            connection.execute("DROP TABLE project_workspace_custody_old")
-            for statement in indexes:
-                connection.execute(statement)
-        node_columns = {row["name"]: row for row in connection.execute("PRAGMA table_info(workspace_node)")}
-        if node_columns["owner_id"]["notnull"]:
-            indexes = [row["sql"] for row in connection.execute("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='workspace_node' AND sql IS NOT NULL")]
-            connection.execute("ALTER TABLE workspace_node RENAME TO workspace_node_custody_old")
-            connection.execute("CREATE TABLE workspace_node (id BLOB PRIMARY KEY,workspace_id BLOB NOT NULL,node_path TEXT NOT NULL,node_kind TEXT NOT NULL,owner_id BLOB,create_time BIGINT NOT NULL,update_time BIGINT NOT NULL,UNIQUE(workspace_id,node_path))")
-            connection.execute("INSERT INTO workspace_node (id,workspace_id,node_path,node_kind,owner_id,create_time,update_time) SELECT id,workspace_id,node_path,node_kind,owner_id,create_time,update_time FROM workspace_node_custody_old")
-            connection.execute("DROP TABLE workspace_node_custody_old")
-            for statement in indexes:
-                connection.execute(statement)
+    def check_schema(self):
+        path = Path(self.path)
+        if not path.exists():
+            return
+        statement = "SELECT type,name,sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL"
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as actual:
+            definitions = {(kind, name): " ".join(sql.split()) for kind, name, sql in actual.execute(statement)}
+            if not definitions:
+                return
+            with closing(sqlite3.connect(":memory:")) as expected:
+                expected.executescript(SCHEMA)
+                problems = [name for kind, name, sql in expected.execute(statement)
+                            if definitions.get((kind, name)) != " ".join(sql.split())]
+            if problems:
+                raise RuntimeError("SCHEMA_INVALID：当前数据库结构与应用模型不一致：" + ",".join(sorted(problems)))
+            if actual.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+                raise RuntimeError("SCHEMA_INVALID：当前数据库完整性校验失败")
 
     @contextmanager
     def connection(self):

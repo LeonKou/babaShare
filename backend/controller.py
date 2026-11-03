@@ -282,7 +282,9 @@ class Application:
                     if entry_path:
                         disk = disk / entry_path
                     raw = disk.read_bytes()
-                download = parse_qs(urlsplit(self.path).query).get("download") == ["1"]
+                    download = parse_qs(urlsplit(self.path).query).get("download") == ["1"]
+                    if kind == "p" and not download:
+                        app.service.onboarding_preview_fetched(token, disk)
                 headers = {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(disk.name, safe="")} if download else None
                 self.reply(raw, content_type=self.mime(disk), headers=headers)
 
@@ -372,6 +374,16 @@ class Application:
                     result = service.email_confirmation(user, self.token(), body, binding=True)
                 elif route == "/session/detail" and method == "GET":
                     result = service.user_view(user)
+                elif route == "/quota/detail" and method == "GET":
+                    result = service.quota_detail(user)
+                elif route == "/onboarding/detail" and method == "GET":
+                    result = service.onboarding_detail(user)
+                elif route == "/onboarding" and method == "PATCH":
+                    result = service.onboarding_change(user, body)
+                elif route == "/onboarding/visit" and method == "POST":
+                    result = service.onboarding_visit(user, self.token(), body)
+                elif route == "/onboarding/preview" and method == "POST":
+                    result = service.onboarding_preview(user, self.token(), body)
                 elif route == "/session" and method == "DELETE":
                     service.repo.execute("DELETE FROM auth_session WHERE session_hash=?", (digest(self.token()),))
                     return {}, ""

@@ -4,6 +4,7 @@
     workspace: "workspace.html",
     "workspace-admin": "workspace-admin.html",
     account: "account.html",
+    onboarding: "onboarding.html",
     users: "users.html",
     settings: "settings.html",
     auth: "auth.html",
@@ -43,6 +44,8 @@
       "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2m20 0v-2a4 4 0 0 0-3-4M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm8-8a4 4 0 0 1 0 8",
     user: "M20 21v-2a6 6 0 0 0-6-6h-4a6 6 0 0 0-6 6v2M12 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z",
     search: "M21 21l-5-5m2-6a7 7 0 1 0-14 0 7 7 0 0 0 14 0Z",
+    eye: "M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12Zm13 0a3 3 0 1 0-6 0 3 3 0 0 0 6 0Z",
+    eyeOff: "m3 3 18 18M10 5.2A11 11 0 0 1 12 5c7 0 10 7 10 7a18 18 0 0 1-3 4M6 6.5A18 18 0 0 0 2 12s3 7 10 7a12 12 0 0 0 5.5-1.5M10 10a3 3 0 0 0 4 4",
     sun: "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM12 1v3m0 16v3M1 12h3m16 0h3M4 4l2 2m12 12 2 2M4 20l2-2M18 6l2-2",
     arrow: "m9 5 7 7-7 7",
     logout: "M9 3H3v18h6m6-14 5 5-5 5m-8-5h13",
@@ -258,12 +261,12 @@
       : [explicit, $("main h1"), $("main"), $("h1")];
     candidates.some(focusTarget);
   }
-  let dialogSequence = 0;
-  function dialog(title, build, { wide = false, preview = false, initialFocus, returnFocus } = {}) {
+  let dialogSequence = 0, drawerCount = 0, drawerOverflow = "";
+  function dialog(title, build, { wide = false, preview = false, drawer = false, initialFocus, returnFocus } = {}) {
     const trigger = document.activeElement;
     const headingId = "dialog-title-" + ++dialogSequence;
     const node = el("dialog", {
-      class: preview ? "preview" : wide ? "editor" : "",
+      class: drawer ? "form-drawer" + (wide ? " editor" : "") : preview ? "preview" : wide ? "editor" : "",
       "aria-labelledby": headingId,
     });
     const heading = el("h2", { id: headingId, text: title });
@@ -285,12 +288,17 @@
           (remaining[remaining.length - 1] || document.fullscreenElement || document.body).append(notice);
         }
         node.remove();
+        if (drawer && --drawerCount === 0) document.body.style.overflow = drawerOverflow;
         restoreDialogFocus(trigger, returnFocus);
       },
       { once: true },
     );
     document.body.append(node);
     node.showModal();
+    if (drawer && drawerCount++ === 0) {
+      drawerOverflow = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+    }
     const notice = $("#global-toast");
     if (notice?.textContent) node.append(notice);
     const initial = typeof initialFocus === "function" ? initialFocus(node) :
@@ -357,6 +365,8 @@
             selected: opt.value === String(value) ? "" : null,
           }),
         );
+    if (options?.some((option) => String(option.value) === String(value))) input.value = String(value);
+    if (className) input.className = className;
     const error = el("small", { id: `${id}-error`, class: "field-error" });
     const hints = [];
     if (hint) hints.push(el("small", { id: `${id}-hint`, text: hint }));
@@ -406,19 +416,20 @@
     title,
     fields,
     submit,
-    { wide = false, saveKey = "save", dirty = false, intro = "" } = {},
+    { wide = false, saveKey = "save", dirty = true, intro = "" } = {},
   ) {
     return dialog(
       title,
       (node, close) => {
-        const form = el("form", { novalidate: "" });
-        form.append(el("p", { class: "form-note", text: I18n.t("required") }));
-        if (intro) form.append(el("p", { class: "form-note", text: intro }));
-        let group = form;
+        const form = el("form", { novalidate: "", class: "form-drawer-form" });
+        const body = el("div", { class: "form-drawer-body" });
+        body.append(el("p", { class: "form-note", "data-i18n": "required", text: I18n.t("required") }));
+        if (intro) body.append(el("p", { class: "form-note", text: intro }));
+        let group = body;
         for (const config of fields) {
           if (config.group) {
             group = el("fieldset", { class: "form-group" }, el("legend", { text: I18n.t(config.group) }));
-            form.append(group);
+            body.append(group);
           }
           field(group, config);
         }
@@ -431,38 +442,43 @@
           role: "status",
           "aria-live": "polite",
         });
-        let submitting = false;
-        node.addEventListener("cancel", (event) => { if (submitting) event.preventDefault(); });
+        let submitting = false, changed = false, confirming = false;
+        const previousDirty = Boolean(window.AppPage?.dirty);
+        const requestClose = async () => {
+          if (submitting || confirming) return;
+          confirming = true;
+          try {
+            if (!dirty || !changed || (await confirmDialog(I18n.t("unsaved")))) close(null);
+          } finally { confirming = false; }
+        };
+        node.addEventListener("cancel", (event) => {
+          event.preventDefault();
+          requestClose();
+        });
+        const back = button("back", requestClose, "form-drawer-back");
+        const dismiss = button("close", requestClose, "form-drawer-close", "close");
+        back.setAttribute("data-i18n-label", "back");
+        dismiss.setAttribute("data-i18n-label", "close");
+        const heading = node.querySelector("h2");
+        const parentTitle = $("main h1")?.textContent || $("h1")?.textContent;
+        const crumbs = el("ol", {},
+          ...(parentTitle ? [el("li", {}, el("button", { type: "button", text: parentTitle, onclick: requestClose }))] : []),
+          el("li", { "aria-current": "page", text: title }));
+        const breadcrumb = el("nav", { class: "crumbs form-drawer-crumbs", "aria-label": I18n.t("breadcrumb"), "data-i18n-label": "breadcrumb" }, crumbs);
+        node.append(breadcrumb, el("header", { class: "form-drawer-header" }, back, heading, dismiss));
         const save = button(saveKey, () => {}, "primary");
         save.type = "submit";
-        const cancel = button("cancel", async () => {
-          if (submitting) return;
-          if (!dirty || !changed || (await confirmDialog(I18n.t("unsaved"))))
-            close(null);
-        });
+        const cancel = button("cancel", requestClose);
+        const exits = [back, dismiss, cancel, ...crumbs.querySelectorAll("button")];
         const footer = el("div", { class: "form-feedback" }, status, el("div", { class: "actions" }, cancel, save));
-        form.append(footer);
-        let changed = false;
-        form.addEventListener("input", () => {
+        form.append(body, footer);
+        const markChanged = () => {
           changed = true;
           if (dirty) window.AppPage?.setDirty(true);
-        });
-        if (dirty) {
-          node.addEventListener("cancel", (event) => {
-            if (submitting) return;
-            if (changed) {
-              event.preventDefault();
-              confirmDialog(I18n.t("unsaved")).then((ok) => {
-                if (ok) close(null);
-              });
-            }
-          });
-          node.addEventListener(
-            "close",
-            () => window.AppPage?.setDirty(false),
-            { once: true },
-          );
-        }
+        };
+        form.addEventListener("input", markChanged);
+        form.addEventListener("change", markChanged);
+        if (dirty) node.addEventListener("close", () => window.AppPage?.setDirty(previousDirty), { once: true });
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
           if (submitting) return;
@@ -473,7 +489,7 @@
           }
           submitting = true;
           const restoreSave = buttonBusy(save, true, "saving");
-          cancel.disabled = true;
+          exits.forEach((control) => { control.disabled = true; });
           status.classList.remove("error");
           status.textContent = I18n.t("saving");
           form.setAttribute("aria-busy", "true");
@@ -483,7 +499,7 @@
           try {
             const value = await submit(values);
             changed = false;
-            if (dirty) window.AppPage?.setDirty(false);
+            if (dirty) window.AppPage?.setDirty(previousDirty);
             close(value ?? true);
             toast(I18n.t("success"), { kind: "success" });
           } catch (e) {
@@ -493,16 +509,22 @@
             submitting = false;
             restoreSave();
             editable.forEach((input) => { input.disabled = false; });
-            cancel.disabled = false;
+            exits.forEach((control) => { control.disabled = false; });
             form.setAttribute("aria-busy", "false");
           }
         });
         node.append(form);
       },
-      { wide },
+      { wide, drawer: true, initialFocus: (node) => [...node.querySelectorAll("input:not([type=hidden]),textarea,select")].find(usableFocus) },
     ).result;
   }
   const errorMap = {
+    ONBOARDING_INCOMPLETE: "ONBOARDING_INCOMPLETE",
+    ONBOARDING_VISIT_REQUIRED: "ONBOARDING_VISIT_REQUIRED",
+    PREVIEW_NOT_READY: "PREVIEW_NOT_READY",
+    QUOTA_INVALID: "QUOTA_INVALID",
+    FILE_COUNT_QUOTA_EXCEEDED: "FILE_COUNT_QUOTA_EXCEEDED",
+    STORAGE_QUOTA_EXCEEDED: "STORAGE_QUOTA_EXCEEDED",
     EMAIL_VERIFICATION_REQUIRED: "EMAIL_VERIFICATION_REQUIRED",
     MAIL_NOT_CONFIGURED: "MAIL_NOT_CONFIGURED",
     MAIL_SEND_FAILED: "MAIL_SEND_FAILED",
@@ -590,7 +612,7 @@
     if (sessionNavigation) return sessionNavigation;
     const protectedPage =
       new URL(".", routeUrl("shell")).pathname === location.pathname ||
-      ["shell", "workspace", "workspace-admin", "account", "users", "settings"].some(
+      ["shell", "workspace", "workspace-admin", "account", "onboarding", "users", "settings"].some(
         (routeId) => new URL(routeUrl(routeId)).pathname === location.pathname,
       );
     if (!protectedPage) return Promise.resolve(false);
@@ -802,6 +824,49 @@
       p = (n) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
   }
+  function quotaValue(mode, value, unit = "B") {
+    if (mode === "inherit") return null;
+    if (mode === "unlimited") return 0;
+    const text = String(value).trim();
+    if (text.length > 128) throw { status: "QUOTA_INVALID" };
+    const match = /^(\d+)(?:\.(\d+))?$/.exec(text);
+    const multiplier = { B: 1n, MiB: 1048576n, GiB: 1073741824n }[unit];
+    if (mode !== "custom" || !match || !multiplier || (unit === "B" && match[2])) throw { status: "QUOTA_INVALID" };
+    const scale = 10n ** BigInt((match[2] || "").length);
+    const numerator = BigInt(match[1] + (match[2] || "")) * multiplier;
+    if (numerator % scale || numerator / scale > BigInt(Number.MAX_SAFE_INTEGER) || numerator === 0n) throw { status: "QUOTA_INVALID" };
+    return Number(numerator / scale);
+  }
+  function quotaFields(quota = {}, defaults = false) {
+    return ["FileCount", "StorageBytes"].flatMap((kind) => {
+      const storage = kind === "StorageBytes", name = (defaults ? "default" + kind : kind[0].toLowerCase() + kind.slice(1)) + "Limit";
+      const value = quota[name], mode = value == null && !defaults ? "inherit" : value > 0 ? "custom" : "unlimited";
+      const unit = storage && value > 0 && value % 1073741824 === 0 ? "GiB" : storage && value > 0 && value % 1048576 === 0 ? "MiB" : "B";
+      const fields = [
+        { group: storage ? "quotaStorage" : "quotaFiles", key: "quotaMode", name: name + "Mode", value: mode, options: [...(defaults ? [] : [{ value: "inherit", label: I18n.t("quotaInherit") }]), { value: "unlimited", label: I18n.t("quotaUnlimited") }, { value: "custom", label: I18n.t("quotaCustom") }] },
+        { key: storage ? "quotaStorage" : "quotaFiles", name, className: "num", value: value > 0 ? String(value / ({ B: 1, MiB: 1048576, GiB: 1073741824 }[unit])) : "", hint: I18n.t("quotaValueHint"), validator: (text) => {
+          try { quotaValue($("#field-" + name + "Mode").value, text, storage ? $("#field-" + name + "Unit").value : "B"); return ""; }
+          catch (_) { return I18n.t("QUOTA_INVALID"); }
+        } },
+      ];
+      if (storage) fields.push({ key: "quotaUnit", name: name + "Unit", value: unit, options: ["MiB", "GiB", "B"].map((item) => ({ value: item, label: item })), hint: I18n.t("quotaUnitHint") });
+      return fields;
+    });
+  }
+  function quotaPayload(values, defaults = false) {
+    return Object.fromEntries(["FileCount", "StorageBytes"].map((kind) => {
+      const name = (defaults ? "default" + kind : kind[0].toLowerCase() + kind.slice(1)) + "Limit";
+      return [name, quotaValue(values[name + "Mode"], values[name], kind === "StorageBytes" ? values[name + "Unit"] : "B")];
+    }));
+  }
+  function quotaSummary(quota, { defaults = false } = {}) {
+    if (!quota) return null;
+    const bytes = (value) => value >= 1073741824 ? `${(value / 1073741824).toFixed(2)} GiB` : value >= 1048576 ? `${(value / 1048576).toFixed(2)} MiB` : `${value} B`;
+    const limit = (value, storage) => value === 0 ? I18n.t("quotaUnlimited") : storage ? bytes(value) : String(value);
+    return el("div", { class: "small muted", "aria-label": I18n.t(defaults ? "quotaDefaults" : "quotaUsage") },
+      ...[["quotaFiles", quota.usedFileCount, quota.effectiveFileCountLimit, false], ["quotaStorage", quota.usedStorageBytes, quota.effectiveStorageBytesLimit, true]].map(([key, used, total, storage]) =>
+        el("p", {}, I18n.t(key) + ": ", el("bdi", { dir: "ltr", class: "num", text: defaults ? limit(total, storage) : `${storage ? bytes(used) : used} / ${limit(total, storage)}` }))));
+  }
   function size(value) {
     if (!value) return "—";
     if (value < 1024) return value + " B";
@@ -970,6 +1035,10 @@
     page,
     date,
     size,
+    quotaValue,
+    quotaFields,
+    quotaPayload,
+    quotaSummary,
     empty,
     preview,
     nameValidator,

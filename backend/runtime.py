@@ -1,5 +1,4 @@
 """启动预检、数据目录单实例锁与有界关闭。"""
-import hmac
 import logging
 import os
 import shutil
@@ -178,22 +177,16 @@ class Preflight:
                     if not result or result[0] != "ok":
                         raise RuntimeError(f"SQLite数据库损坏：{path}；停止服务，先备份整个数据目录，再从一致性备份恢复或人工修复。不会清理、替换数据库。")
             repo = Repository(path)
-            rows = repo.all("SELECT id,user_id,key_hash,mcp_derivation_nonce,mcp_derivation_version FROM auth_mcp_key WHERE mcp_derivation_version IS NOT NULL")
+            rows = repo.all("SELECT id,user_id,key_hash,mcp_derivation_nonce,mcp_derivation_version FROM auth_mcp_key")
             if rows:
-                from .service import BizError, Service, digest
+                from .service import BizError, Service
+                service = Service.__new__(Service)
+                service.config = self.config
                 try:
-                    service = Service.__new__(Service)
-                    service.config = self.config
                     for row in rows:
-                        if (row["mcp_derivation_version"] != "hmac-sha256-v1"
-                                or not isinstance(row["mcp_derivation_nonce"], str)
-                                or len(row["mcp_derivation_nonce"]) != 64):
-                            raise RuntimeError("MCP派生信息无效，请恢复匹配备份；不会自动重建主密钥")
-                        key = service.mcp_derived_key(row["user_id"], row["id"], row["mcp_derivation_nonce"])
-                        if not hmac.compare_digest(digest(key), row["key_hash"]):
-                            raise RuntimeError("MCP主密钥与数据库不匹配；请恢复配套备份，不会自动重建主密钥")
+                        service.mcp_stored_key(row)
                 except (BizError, ValueError, TypeError):
-                    raise RuntimeError("MCP主密钥丢失、不可读或派生信息无效；请恢复配套受保护备份，不会自动重建主密钥") from None
+                    raise RuntimeError("MCP主密钥丢失、不可读、与数据库不匹配或派生信息无效；不会自动重建主密钥") from None
         except sqlite3.DatabaseError as exc:
             code = getattr(exc, "sqlite_errorcode", 0)
             if code & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):

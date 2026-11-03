@@ -8,6 +8,24 @@
     <link rel="stylesheet" href="assets/tokens.css" />
     <link rel="stylesheet" href="assets/components.css" />
     <link rel="stylesheet" href="assets/layout.css" />
+    <style>
+      #profile-summary{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:var(--space-4)}
+      #profile-summary .profile-identity{display:flex;flex-direction:column;gap:var(--space-2);min-inline-size:0;overflow-wrap:anywhere}
+      #profile-summary .profile-meta{gap:var(--space-2)}
+      #profile-summary .profile-actions{align-self:start;min-inline-size:0;max-inline-size:100%}
+      #profile-summary .profile-actions button,#account-email-actions button{max-inline-size:100%;white-space:normal;overflow-wrap:anywhere}
+      #account-panel-profile>.form-note{margin-block-end:var(--space-6)}
+      .account-email-section{display:flex;flex-direction:column;gap:var(--space-4);min-inline-size:0;overflow-wrap:anywhere}
+      .account-email-section .form-note{margin:0}
+      #account-email-summary .form-note{margin-block-start:var(--space-2)}
+      #account-email-actions{justify-content:flex-start;gap:var(--space-2)}
+      #account-email-actions:empty,#account-email-status:empty{display:none}
+      @media(max-width:600px){
+        #profile-summary{grid-template-columns:auto minmax(0,1fr)}
+        #profile-summary .profile-actions{grid-column:1/-1;justify-self:start}
+        #profile-summary .profile-actions button,#account-email-actions button{min-block-size:40px}
+      }
+    </style>
   </head>
   <body>
     <main class="page">
@@ -35,7 +53,7 @@
         <h2 id="profile-title" data-i18n="profile">账户资料</h2>
         <div id="profile-summary" class="profile-summary"></div>
         <p class="form-note" data-i18n="accountReadOnlyHint">账号名仅管理员可修改，邮箱可通过下方验证流程独立换绑。</p>
-        <section class="section" aria-labelledby="account-email-title">
+        <section class="section account-email-section" aria-labelledby="account-email-title">
           <h3 id="account-email-title" data-i18n="accountEmail">登录邮箱</h3>
           <div id="account-email-summary"></div>
           <p class="form-note" data-i18n="emailSameBrowserHint">请在发起操作的同一浏览器中登录对应账户并打开邮件链接完成验证。</p>
@@ -58,7 +76,6 @@
             <option value="all" data-i18n="mcpAll">全部密钥</option>
             <option value="active" data-i18n="active">有效</option>
             <option value="expired" data-i18n="expired">已过期</option>
-            <option value="revoked" data-i18n="revoked">已撤销</option>
           </select>
         </div>
         <div id="mcp-pagination" class="pagination"></div>

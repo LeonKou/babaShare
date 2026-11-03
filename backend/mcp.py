@@ -2,6 +2,7 @@
 import json
 import sqlite3
 
+from .mcp_tree import DirectoryTree, TREE_INSTRUCTIONS, TREE_META_KEY
 from .repository import now_ms
 from .service import BizError
 
@@ -25,6 +26,7 @@ INTEGER = {"type": "integer"}
 BOOLEAN = {"type": "boolean"}
 WORKSPACE = {"workspaceId": STRING}
 PATH = {**WORKSPACE, "path": STRING}
+SELECTION = {"treeToken": STRING, "targetId": STRING}
 
 
 def validate(value, schema):
@@ -57,9 +59,12 @@ class MCP:
         self.service = service
         self.tools = {}
         self.tool_windows = {}
+        self.directory_tree = DirectoryTree(service)
+        self.register("directory_tree", "获取当前用户全部可访问工作区和纯文件夹完整树；创建前必须展示并确认目标，complete=false时禁止创建。", obj({}),
+                      self.directory_tree.snapshot, read_only=True)
         self.register("workspace_list", "列出当前用户有权访问的工作区。", obj({}),
                       lambda user, args: service.workspaces(user), read_only=True)
-        self.register("workspace_create", "创建工作区；同一所有者同名重试返回已有工作区。",
+        self.register("workspace_create", "创建工作区；同一所有者同名重试返回已有工作区。创建后必须调用directory_tree刷新并让用户选择目标。",
                       obj({"workspaceName": STRING, "description": STRING}, ("workspaceName",)), service.workspace_create)
         self.register("workspace_change", "修改工作区名称或说明，仅所有者和管理员可用。",
                       obj({"id": STRING, "workspaceName": STRING, "description": STRING}, ("id",)), service.workspace_change)
@@ -69,19 +74,21 @@ class MCP:
                       obj({**PATH, "pageIndex": INTEGER, "pageSize": INTEGER, "search": STRING,
                            "sort": {"type": "string", "enum": ["name", "size", "updateTime"]},
                            "order": {"type": "string", "enum": ["asc", "desc"]}}, ("workspaceId",)),
-                      lambda user, args: service.listing(args["workspaceId"], args.get("path", ""), user,
-                          args.get("pageIndex", 1), args.get("pageSize", 20), args.get("search", ""),
-                          args.get("sort", "name"), args.get("order", "asc")), read_only=True)
-        self.register("folder_create", "创建相对路径文件夹，自动创建父目录。", obj(PATH, ("workspaceId", "path")), service.folder_create)
+                      self.node_list)
+        self.register("folder_create", "在用户从directory_tree确认选择的目录下创建相对路径文件夹，自动创建父目录。",
+                      obj({**SELECTION, "relativePath": STRING}, ("treeToken", "targetId", "relativePath")),
+                      lambda user, args: self.directory_tree.create("folder_create", user, args))
         self.register("file_read", "读取UTF-8文本，最大4MB。", obj(PATH, ("workspaceId", "path")),
                       lambda user, args: service.file_read(user, args["workspaceId"], args["path"]), read_only=True)
-        self.register("file_write", "写入UTF-8文本，自动创建父目录；已有文件受协作权限约束。",
-                      obj({**PATH, "content": STRING}, ("workspaceId", "path", "content")), service.file_write, destructive=True)
-        self.register("file_upload", "批量上传并保留相对目录。conflictPolicy默认ask：同名返回requiresConfirmation及conflicts且整批不写入；overwrite本次全部覆盖；rename仅同名文件扩展名前追加服务端UTC毫秒，必须传requestId用于幂等重试。返回files的sourcePath/targetPath映射。保留两份可能需手工调整HTML相对引用，不会自动改写。权限与安全路径冲突不能绕过。",
-                      obj({**PATH, "conflictPolicy": {"type": "string", "enum": ["ask", "overwrite", "rename"], "default": "ask"},
+        self.register("file_write", "在用户从directory_tree确认选择的目录下写入UTF-8文本，relativePath为目录内相对名称；已有文件受内容权限和配额约束。",
+                      obj({**SELECTION, "relativePath": STRING, "content": STRING}, ("treeToken", "targetId", "relativePath", "content")),
+                      lambda user, args: self.directory_tree.create("file_write", user, args), destructive=True)
+        self.register("file_upload", "在用户从directory_tree确认选择的目录下批量上传并保留files[].path相对目录。conflictPolicy默认ask：同名返回requiresConfirmation及conflicts且整批不写入；overwrite本次全部覆盖；rename仅同名文件扩展名前追加服务端UTC毫秒，必须传requestId用于幂等重试。返回files的sourcePath/targetPath映射。保留两份可能需手工调整HTML相对引用，不会自动改写。权限与安全路径冲突不能绕过。",
+                      obj({**SELECTION, "conflictPolicy": {"type": "string", "enum": ["ask", "overwrite", "rename"], "default": "ask"},
                            "requestId": STRING, "files": {"type": "array", "minItems": 1, "maxItems": 500,
                            "items": obj({"path": STRING, "contentBase64": STRING}, ("path", "contentBase64"))}},
-                          ("workspaceId", "files")), service.upload, destructive=True)
+                          ("treeToken", "targetId", "files")),
+                      lambda user, args: self.directory_tree.create("upload", user, args), destructive=True)
         for kind in ("file", "folder"):
             self.register(kind + "_move", "移动或重命名" + ("文件。" if kind == "file" else "文件夹及子内容。"),
                           obj({**PATH, "newPath": STRING}, ("workspaceId", "path", "newPath")),
@@ -97,11 +104,20 @@ class MCP:
                       lambda user, args: service.share_delete(user, args["id"]), destructive=True)
         self.register("member_list", "列出有权访问的工作区成员。", obj(WORKSPACE, ("workspaceId",)),
                       lambda user, args: service.members(user, args["workspaceId"]), read_only=True)
-        self.register("member_change", "邀请已有账号或调整协作权限；须传userId或userName，仅工作区管理者可用。",
-                      obj({**WORKSPACE, "userId": STRING, "userName": STRING, "collaborate": BOOLEAN}, ("workspaceId",)), service.member_change, destructive=True)
+        self.register("member_change", "邀请已有账号或调整成员权限；viewer只读，editor仅编辑删除本人内容，manager管理当前工作区；须传userId或userName，仅工作区管理者可用。",
+                      obj({**WORKSPACE, "userId": STRING, "userName": STRING,
+                           "memberRole": {"type": "string", "enum": ["viewer", "editor", "manager"]}}, ("workspaceId",)), service.member_change, destructive=True)
         self.register("member_delete", "移除工作区成员，仅工作区管理者可用。",
                       obj({**WORKSPACE, "userId": STRING}, ("workspaceId", "userId")),
                       lambda user, args: service.member_delete(user, args["workspaceId"], args["userId"]), destructive=True)
+
+    def node_list(self, user, args):
+        with self.service.lock:
+            result = self.service.listing(args["workspaceId"], args.get("path", ""), user,
+                args.get("pageIndex", 1), args.get("pageSize", 20), args.get("search", ""),
+                args.get("sort", "name"), args.get("order", "asc"))
+            self.service.onboarding_record_visit(user, args["workspaceId"])
+            return result
 
     def register(self, name, description, schema, function, read_only=False, destructive=False):
         self.tools[name] = ({"name": name, "description": description, "inputSchema": schema,
@@ -144,7 +160,8 @@ class MCP:
             result = {"protocolVersion": version if version in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[-1],
                       "capabilities": {"tools": {"listChanged": False}},
                       "serverInfo": {"name": "babaShare", "version": "1.0.0"},
-                      "instructions": "操作继承密钥所有者的实时账号和工作区权限。文件路径均为相对路径；上传原型请使用file_upload保留目录结构。"}
+                      "instructions": TREE_INSTRUCTIONS,
+                      "_meta": {TREE_META_KEY: self.directory_tree.snapshot(user)}}
         elif method == "ping":
             result = {}
         elif method == "tools/list":
@@ -181,6 +198,10 @@ class MCP:
                 self.tool_windows[user["id"]] = (window, count + 1)
             value = function(user, arguments)
             value = {"items": value} if isinstance(value, list) else value
+            if not value.get("requiresConfirmation", False):
+                with self.service.lock, self.service.repo.connection() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    self.service.onboarding_record(connection, user, "mcp_tool_call")
         except BizError as exc:
             failed, value = True, {"status": exc.status, "code": exc.code, "msg": exc.msg}
         except (ValueError, TypeError, KeyError, AttributeError):

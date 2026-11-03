@@ -8,9 +8,10 @@
     <link rel="stylesheet" href="assets/tokens.css" />
     <link rel="stylesheet" href="assets/components.css" />
     <link rel="stylesheet" href="assets/layout.css" />
+    <link rel="stylesheet" href="assets/product-demo.css" />
   </head>
   <body class="auth-body">
-    <aside class="auth-story">
+    <aside class="auth-story auth-story-with-demo">
       <a class="brand brand-home" href="/baba-share/">
         <span class="brand-mark" aria-hidden="true"
           ><i></i><i></i><i></i><i></i></span
@@ -28,6 +29,7 @@
           ><span data-i18n="security">安全隔离</span>
         </div>
       </div>
+      <div id="auth-product-demo" class="product-demo" data-product-demo></div>
       <p class="small" data-i18n="authFooter">为高效协作而设计。</p>
     </aside>
     <div class="auth-settings" id="auth-settings"></div>
@@ -66,6 +68,7 @@
     </footer>
     <div id="global-toast" class="toast" role="status" aria-live="polite"></div>
     <script src="assets/i18n.js"></script>
+    <script src="assets/product-demo.js"></script>
     <script src="assets/common.js"></script>
     <script src="assets/api.js"></script>
     <script src="assets/auth.js"></script>
