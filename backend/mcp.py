@@ -80,10 +80,10 @@ class MCP:
                       lambda user, args: self.directory_tree.create("folder_create", user, args))
         self.register("file_read", "读取UTF-8文本，最大4MB。", obj(PATH, ("workspaceId", "path")),
                       lambda user, args: service.file_read(user, args["workspaceId"], args["path"]), read_only=True)
-        self.register("file_write", "在用户从directory_tree确认选择的目录下写入UTF-8文本，relativePath为目录内相对名称；已有文件受内容权限和配额约束。",
+        self.register("file_write", "在用户从directory_tree确认选择的目录下写入UTF-8文本，relativePath为目录内相对名称；已有文件受内容权限和配额约束。若写入供babaShare预览的HTML：面向opaque沙箱来源，不依赖站点登录、存储、Cookie或父页DOM；CSS/脚本优先内嵌，分文件时保留相对路径；预览CSP的connect-src为none；初始化locale等状态须先于渲染回调绑定，DOMContentLoaded不能修复TDZ；原型无后端依赖，不嵌入MCP Key或第三方凭据，不放宽sandbox。",
                       obj({**SELECTION, "relativePath": STRING, "content": STRING}, ("treeToken", "targetId", "relativePath", "content")),
                       lambda user, args: self.directory_tree.create("file_write", user, args), destructive=True)
-        self.register("file_upload", "在用户从directory_tree确认选择的目录下批量上传并保留files[].path相对目录。conflictPolicy默认ask：同名返回requiresConfirmation及conflicts且整批不写入；overwrite本次全部覆盖；rename仅同名文件扩展名前追加服务端UTC毫秒，必须传requestId用于幂等重试。返回files的sourcePath/targetPath映射。保留两份可能需手工调整HTML相对引用，不会自动改写。权限与安全路径冲突不能绕过。",
+        self.register("file_upload", "在用户从directory_tree确认选择的目录下批量上传并保留files[].path相对目录。conflictPolicy默认ask：同名返回requiresConfirmation及conflicts且整批不写入；overwrite本次全部覆盖；rename仅同名文件扩展名前追加服务端UTC毫秒，必须传requestId用于幂等重试。返回files的sourcePath/targetPath映射。保留两份可能需手工调整HTML相对引用，不会自动改写。供预览的HTML面向opaque沙箱来源，资源用相对路径并随批上传；预览CSP禁止网络连接，不依赖站点存储、Cookie或父页DOM；原型无后端依赖，不嵌入凭据，不放宽sandbox。权限与安全路径冲突不能绕过。",
                       obj({**SELECTION, "conflictPolicy": {"type": "string", "enum": ["ask", "overwrite", "rename"], "default": "ask"},
                            "requestId": STRING, "files": {"type": "array", "minItems": 1, "maxItems": 500,
                            "items": obj({"path": STRING, "contentBase64": STRING}, ("path", "contentBase64"))}},

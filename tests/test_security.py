@@ -298,11 +298,16 @@ class SecurityHttpTests(unittest.TestCase):
         return self.ok("POST", "/share", "owner", {"workspaceId": self.workspace, "path": "site", "expireHours": 1})
 
     def assert_sandbox(self, headers):
-        self.assertIn("sandbox allow-scripts;", headers["content-security-policy"])
-        self.assertNotIn("allow-same-origin", headers["content-security-policy"])
+        policy = headers["content-security-policy"]
+        self.assertIn("sandbox allow-scripts;", policy)
+        self.assertIn("connect-src 'none'", policy)
+        self.assertIn("script-src 'self' 'unsafe-inline' 'unsafe-eval'", policy)
+        self.assertIn("style-src 'self' 'unsafe-inline'", policy)
+        self.assertNotIn("allow-same-origin", policy)
         self.assertEqual(headers["cache-control"], "no-store")
         self.assertNotIn("set-cookie", headers)
         self.assertNotIn("access-control-allow-credentials", headers)
+        self.assertEqual(headers["access-control-allow-origin"], "*")
 
     def test_raw_preview_all_responses_keep_sandbox(self):
         share = self.make_share()

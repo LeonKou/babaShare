@@ -60,6 +60,8 @@ for (const file of ['i18n.js', 'mcp-help.js']) {
   vm.runInContext(source, context);
 }
 const markers = { 'zh-CN': '只读验证', 'en-US': 'Read-only verification', 'ar-SA': 'تحقق للقراءة فقط' };
+const htmlKeys = ['mcpHtmlSandbox', 'mcpHtmlResources', 'mcpHtmlInitialization', 'mcpHtmlValidation'];
+const translations = new Map(htmlKeys.map(key => [key, new Set()]));
 for (const [locale, marker] of Object.entries(markers)) {
   context.I18n.apply({ locale, theme: 'dark' });
   assert.equal(context.document.documentElement.dir, locale === 'ar-SA' ? 'rtl' : 'ltr');
@@ -67,6 +69,16 @@ for (const [locale, marker] of Object.entries(markers)) {
     context.location = new URL(origin + '/baba-share/account.html');
     const text = context.McpHelp.instructions(input.secret);
     assert(text.includes(marker));
+    for (const key of htmlKeys) {
+      const value = context.I18n.t(key);
+      assert.notEqual(value, key);
+      assert(text.includes(value), locale + ' ' + key);
+      translations.get(key).add(value);
+    }
+    for (const token of ['localStorage', 'sessionStorage', 'IndexedDB', 'allow-scripts', 'allow-same-origin',
+      "connect-src 'none'", 'fetch/XHR/WebSocket', 'ES module', 'MIME', 'CORS', 'Access-Control-Allow-Origin: *',
+      'Cannot access currentLocale before initialization', 'DOMContentLoaded', 'TDZ', 'runtime.lastError'])
+      assert(text.includes(token), locale + ' ' + token);
     assert.equal(text.split(input.secret).length - 1, 1);
     assert(text.includes('URL: ' + origin + '/api/baba-share/core/v1/mcp'));
     assert(text.includes('bearer_token_env_var'));
@@ -95,6 +107,7 @@ for (const [locale, marker] of Object.entries(markers)) {
     assert.equal(new Set(tools).size, 20);
   }
 }
+for (const [key, values] of translations) assert.equal(values.size, 3, key + ' must have three translations');
 assert.equal(warnings.length, 0);
 assert(!JSON.stringify(context.I18n.ctx).includes(input.secret));
 context.location = new URL('file:///account.html');

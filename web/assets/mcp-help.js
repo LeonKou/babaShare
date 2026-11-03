@@ -51,6 +51,10 @@
       I18n.t("mcpDirectorySelection"),
       I18n.t("mcpReadmeToolHints"),
       I18n.t("mcpUploadConflict"),
+      I18n.t("mcpHtmlSandbox"),
+      I18n.t("mcpHtmlResources"),
+      I18n.t("mcpHtmlInitialization"),
+      I18n.t("mcpHtmlValidation"),
       I18n.t("mcpUseVerify"),
       I18n.t("mcpUseDiagnose"),
     ].join("\n\n");

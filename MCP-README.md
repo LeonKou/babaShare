@@ -240,6 +240,16 @@ prototype/
 
 上传后用 `node_list` 检查所选工作区、目录路径及上传子目录，并通过页面预览验证资源引用；需要分享时再明确请求 `share_create`。目录树不展示文件，不能用它检查文件上传结果。
 
+### HTML 预览约束
+
+供 babaShare 预览的 HTML 在 `sandbox="allow-scripts"` 的 iframe 中运行，后端 CSP 同样使用 `sandbox allow-scripts` 且不授予 `allow-same-origin`，因此文档具有 opaque 来源，不继承站点登录身份，也不能访问父页 DOM。不要依赖 `localStorage`、`sessionStorage`、IndexedDB、Cookie 或同源身份，也不要尝试放宽沙箱。
+
+优先内嵌 CSS、JS 和数据，生成无后端依赖的原型；使用内存状态，不以持久化存储为运行前提。需要拆分时保留相对目录并一并上传，不用本机绝对路径、站点根路径或父页面 DOM/资源。不要把 MCP Key 或第三方凭据放入 HTML 或资源文件。
+
+当前预览 CSP 的 `connect-src 'none'` 禁止 `fetch`、XHR、WebSocket，包含对相对 JSON 文件的 fetch；`script-src 'self' 'unsafe-inline' 'unsafe-eval'`、`style-src 'self' 'unsafe-inline'` 不放行外部 CDN 脚本或样式。这不等于所有外网能力或 ES module 一概被禁：模块加载还需满足 CSP、MIME 和 CORS，预览资源响应提供 `Access-Control-Allow-Origin: *`，不提供 `Access-Control-Allow-Credentials`。其他资源类型按各自 CSP 与浏览器规则判断，不能承诺任意外网可用；不要通过调整沙箱权限解决资源问题。
+
+生成脚本时先声明并初始化所有状态（包括 `locale`），再定义渲染逻辑或绑定回调；检查变量作用域和执行顺序。`Cannot access currentLocale before initialization` 是 JavaScript 暂时性死区（TDZ）错误，不是沙箱权限错误，单纯等待 `DOMContentLoaded` 不会修复。`runtime.lastError` 常见于扩展消息链路，但仅凭该消息不能确定原因，需结合调用栈与来源定位。上传后在隔离预览中检查页面及相对资源；该预览不是具备站点 API 或登录能力的完整开发环境。
+
 ## 9. 密钥管理 HTTP API（只供网页登录会话）
 
 以下接口仅接受已登录浏览器 Cookie 会话，不能用 MCP Bearer 密钥调用，也不暴露为 MCP tools。成功直接返回业务对象/数组，不含 `data` 外包装。

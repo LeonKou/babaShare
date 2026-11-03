@@ -877,7 +877,7 @@ test("MCP三语复制说明先读取目录树并确认目标，不承诺客户�
   for (const locale of ["zh-CN", "en-US", "ar-SA"]) {
     app.context.I18n.apply({ locale, theme: "dark" });
     const text = app.context.McpHelp.instructions("bsk_private_test");
-    for (const item of ["initialize", "directory_tree {}", "complete=false", "relativePath", "treeToken", "targetId", "memberRole", "viewer/editor/manager", "NULL", "Base64"]) assert(text.includes(item), locale + " " + item);
+    for (const item of ["initialize", "directory_tree {}", "complete=false", "relativePath", "treeToken", "targetId", "memberRole", "viewer/editor/manager", "NULL", "Base64", "opaque", "localStorage", "connect-src", "currentLocale", "DOMContentLoaded", "runtime.lastError"]) assert(text.includes(item), locale + " " + item);
     assert(text.includes(app.context.I18n.t("mcpDirectorySelection")));
     assert.notEqual(app.context.I18n.t("mcpDirectorySelection"), "mcpDirectorySelection");
     assert.doesNotMatch(text, /19 tools|19 个工具|19 أداة/);

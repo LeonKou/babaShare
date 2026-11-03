@@ -448,6 +448,12 @@ for(const file of ['i18n.js','api.js','pagination.js','mcp-help.js'])vm.runInCon
         workspace = self.call(key, "workspace_create", {"workspaceName": "冲突策略"})["result"]["structuredContent"]["id"]
         tools = self.rpc(key, "tools/list")[1]["result"]["tools"]
         self.assertEqual(len(tools), 20)
+        write_description = next(item["description"] for item in tools if item["name"] == "file_write")
+        upload_description = next(item["description"] for item in tools if item["name"] == "file_upload")
+        for marker in ("opaque", "connect-src", "locale", "DOMContentLoaded", "TDZ", "不放宽sandbox"):
+            self.assertIn(marker, write_description)
+        for marker in ("opaque", "相对路径", "不依赖站点存储", "不放宽sandbox"):
+            self.assertIn(marker, upload_description)
         schema = next(item for item in tools if item["name"] == "file_upload")["inputSchema"]
         self.assertEqual(schema["properties"]["conflictPolicy"]["enum"], ["ask", "overwrite", "rename"])
         self.assertEqual(schema["properties"]["conflictPolicy"]["default"], "ask")
