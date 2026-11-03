@@ -29,6 +29,22 @@ class OfficeInstallerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.installer.replace_once(text, "old", "new")
 
+    def test_desktop_patches_match_fixed_release_and_reject_drift(self):
+        root = Path(__file__).resolve().parents[1] / "web/vendor/office/v9.3.0.24-1/web-apps/apps"
+        for editor in ("documenteditor", "spreadsheeteditor", "presentationeditor"):
+            with self.subTest(editor=editor):
+                html = (root / editor / "main/index.html").read_text(encoding="utf-8")
+                app = (root / editor / "main/app.js").read_text(encoding="utf-8")
+                self.assertIn("require(['app']);", html)
+                self.assertNotIn("require(['ie/app'])", html)
+                self.assertNotIn("fix-ie-compat.js", html)
+                self.assertIn('"' + editor + '/main/code"', app)
+                self.assertNotIn("/main/ie/code", app)
+                with self.assertRaises(ValueError):
+                    self.installer.patch_desktop_entry(html)
+                with self.assertRaises(ValueError):
+                    self.installer.patch_desktop_app(app, editor)
+
     def make_release_fixture(self, root):
         source = root / "source"
         source.mkdir()
@@ -53,6 +69,7 @@ class OfficeInstallerTests(unittest.TestCase):
                b'iframe.setAttribute("allow", "autoplay; camera; microphone; display-capture; clipboard-write;");')
         retained = {
             engine + "web-apps/apps/api/documents/api.js": api,
+            engine + "web-apps/apps/documenteditor/main/ie/ThirdPartyNotices.txt": b"synthetic legal notice",
             engine + "fonts/arial.ttf": b"synthetic font",
             engine + "fonts/LICENSE.txt": b"synthetic font license",
             engine + "sdkjs/common/src/runtime.js": b"synthetic SDK dependency",
@@ -77,9 +94,21 @@ class OfficeInstallerTests(unittest.TestCase):
         for editor in ("documenteditor", "spreadsheeteditor", "presentationeditor"):
             app = engine + "web-apps/apps/" + editor + "/"
             retained.update({
-                app + "main/index.html": b'<html><head><base href="https://office-editor.ziziyi.com/"></head></html>',
+                app + "main/index.html": (
+                    '<html><head><base href="https://office-editor.ziziyi.com/"></head><script>\n'
+                    '        isIEBrowser === true &&\n'
+                    '            (document.write(\'<script src="../../common/main/lib/util/fix-ie-compat.js"><\\/script>\'),\n'
+                    '            document.write(\'<script src="../../../../sdkjs/vendor/string.js"><\\/script>\'));\n'
+                    "isIEBrowser === true ? require(['ie/app']) : require(['app']);\n"
+                    '</script></html>'
+                ).encode(),
                 app + "main/app.css": b"synthetic desktop CSS",
-                app + "main/app.js": b"synthetic desktop JS",
+                app + "main/locale/zh.json": b'{"test":"zh"}',
+                app + "main/locale/en.json": b'{"test":"en"}',
+                app + "main/locale/ar.json": b'{"test":"ar"}',
+                app + "main/resources/css/rtl.css": b"synthetic RTL CSS",
+                app + "main/app.js": ('const t=window.isIEBrowser?"' + editor + '/main/ie/code":"'
+                                       + editor + '/main/code";').encode(),
                 app + "main/resources/help/en/Contents.json": b"[]",
                 app + "main/resources/help/licensing-notice.txt": b"synthetic help licensing notice",
                 app + "mobile/index.html": b"<html><head></head></html>",
@@ -87,6 +116,8 @@ class OfficeInstallerTests(unittest.TestCase):
                 app + "mobile/dist/js/app.js.LICENSE.txt": b"synthetic mobile license",
             })
             excluded.update({
+                app + "main/ie/app.js": b"excluded IE app bundle",
+                app + "main/ie/code.js": b"excluded IE SDK loader",
                 app + "main/app.js.map": b"excluded desktop map",
                 app + "main/app.css.map": b"excluded CSS map",
                 app + "main/resources/help/en/guide.html": b"excluded editor help",
@@ -131,9 +162,17 @@ class OfficeInstallerTests(unittest.TestCase):
             for editor in ("documenteditor", "spreadsheeteditor", "presentationeditor"):
                 name = engine + "web-apps/apps/" + editor + "/main/index.html"
                 patched.add(name)
+                patched.add(engine + "web-apps/apps/" + editor + "/main/app.js")
+                app_text = (destination / (engine + "web-apps/apps/" + editor + "/main/app.js")).read_text(encoding="utf-8")
+                self.assertIn('"' + editor + '/main/code"', app_text)
+                self.assertNotIn("/main/ie/code", app_text)
                 html = (destination / name).read_text(encoding="utf-8")
                 self.assertIn(self.installer.BRIDGE, html)
                 self.assertIn(self.installer.RESOURCE_ROOT, html)
+                self.assertIn("require(['app']);", html)
+                self.assertNotIn("require(['ie/app'])", html)
+                self.assertNotIn("fix-ie-compat.js", html)
+                self.assertNotIn("sdkjs/vendor/string.js", html)
             for name, content in retained.items():
                 with self.subTest(retained=name):
                     self.assertTrue((destination / name).is_file())
@@ -221,9 +260,16 @@ class OfficeInstallerTests(unittest.TestCase):
             self.assertEqual(archive.read_bytes(), b"existing source archive")
             self.assertFalse(destination.exists())
 
-    def test_runtime_filter_is_limited_to_maps_and_app_help(self):
+    def test_runtime_filter_is_limited_to_maps_app_help_and_six_fixed_ie_bundles(self):
         for name in ("fonts/src/font.ttf", "sdkjs/common/src/dependency.js",
                      "web-apps/apps/documenteditor/mobile/dist/js/app.js",
+                     "web-apps/apps/documenteditor/embed/index.html",
+                     "v9.3.0.24-1/web-apps/apps/visioeditor/main/ie/app.js",
+                     "v9.3.0.24-1/web-apps/apps/pdfeditor/main/ie/code.js",
+                     "v9.3.0.24-1/web-apps/apps/documenteditor/main/ie/unknown.js",
+                     "v9.3.0.24-2/web-apps/apps/documenteditor/main/ie/app.js",
+                     "v9.3.0.24-1/sdkjs/visio/sdk-all.js",
+                     "v9.3.0.24-1/web-apps/apps/documenteditor/main/ie/ThirdPartyNotices.txt",
                      "other/resources/help/guide.html", "web-apps/vendor/resources/help/guide.html",
                      "web-apps/apps/common/main/resources/helpful/guide.html",
                      "web-apps/apps/common/main/resources/help/en/Contents.json",
@@ -232,10 +278,31 @@ class OfficeInstallerTests(unittest.TestCase):
             with self.subTest(retained=name):
                 self.assertTrue(self.installer.include_runtime_member(name))
         for name in ("app.js.map", "APP.CSS.MAP",
+                     "v9.3.0.24-1/web-apps/apps/documenteditor/main/ie/app.js",
+                     "v9.3.0.24-1/web-apps/apps/documenteditor/main/ie/code.js",
+                     "v9.3.0.24-1/web-apps/apps/spreadsheeteditor/main/ie/app.js",
+                     "v9.3.0.24-1/web-apps/apps/spreadsheeteditor/main/ie/code.js",
+                     "v9.3.0.24-1/web-apps/apps/presentationeditor/main/ie/app.js",
+                     "v9.3.0.24-1/web-apps/apps/presentationeditor/main/ie/code.js",
                      "web-apps/apps/common/main/resources/help/en/guide.html",
                      "web-apps/apps/common/main/resources/help/en/images/icon.png"):
             with self.subTest(excluded=name):
                 self.assertFalse(self.installer.include_runtime_member(name))
+
+    def test_desktop_patch_rejects_missing_or_duplicate_release_markers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            _, _, retained, _ = self.make_release_fixture(Path(temporary))
+            for editor in ("documenteditor", "spreadsheeteditor", "presentationeditor"):
+                prefix = "v9.3.0.24-1/web-apps/apps/" + editor + "/main/"
+                html, app = (retained[prefix + name].decode() for name in ("index.html", "app.js"))
+                for text in ("", html + html):
+                    with self.subTest(editor=editor, marker="html", count=bool(text)):
+                        with self.assertRaises(ValueError):
+                            self.installer.patch_desktop_entry(text)
+                for text in ("", app + app):
+                    with self.subTest(editor=editor, marker="app", count=bool(text)):
+                        with self.assertRaises(ValueError):
+                            self.installer.patch_desktop_app(text, editor)
 
     def test_source_archive_contains_direct_dependencies_and_actual_patched_api(self):
         with tempfile.TemporaryDirectory() as temporary:

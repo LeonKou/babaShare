@@ -58,6 +58,12 @@ def include_runtime_member(name):
     if path.suffix.lower() == ".map":
         return False
     parts = path.parts
+    # 仅固定发行的六个 IE 独立 bundle；不吞掉同目录的法律通知或未知依赖。
+    if (len(parts) == 7 and parts[0] == "v9.3.0.24-1"
+            and parts[1:3] == ("web-apps", "apps")
+            and parts[3] in {"documenteditor", "spreadsheeteditor", "presentationeditor"}
+            and parts[4:6] == ("main", "ie") and parts[6] in {"app.js", "code.js"}):
+        return False
     # 只裁剪 web-apps/apps 下的帮助目录，不按 src/mobile 等名字推测运行依赖。
     for index in range(len(parts) - 2):
         if parts[index:index + 2] == ("web-apps", "apps"):
@@ -66,6 +72,25 @@ def include_runtime_member(name):
                     return path.name == "Contents.json" or bool(re.search(
                         r"licen[cs]|notice|copying|copyright", path.name, re.IGNORECASE))
     return True
+
+
+def patch_desktop_entry(text):
+    text = replace_once(
+        text,
+        """        isIEBrowser === true &&
+            (document.write('<script src=\"../../common/main/lib/util/fix-ie-compat.js\"><\\/script>'),
+            document.write('<script src=\"../../../../sdkjs/vendor/string.js\"><\\/script>'));
+""",
+        "",
+    )
+    text = replace_once(text, "isIEBrowser === true ? require(['ie/app']) : require(['app']);",
+                        "require(['app']);")
+    return text
+
+
+def patch_desktop_app(text, editor):
+    return replace_once(text, 'window.isIEBrowser?"' + editor + '/main/ie/code":"' + editor + '/main/code"',
+                        '"' + editor + '/main/code"')
 
 
 def package_source(source, destination, source_output, manifest=None):
@@ -198,9 +223,14 @@ def install(archive, source, destination, source_output=None):
                 text = replace_once(text, origin, RESOURCE_ROOT)
         if path.parent.name == "main" and path.name == "index.html" and path.parent.parent.name in ("documenteditor", "spreadsheeteditor", "presentationeditor"):
             text = replace_once(text, "<head>", "<head>\n    " + BRIDGE)
+            text = patch_desktop_entry(text)
         if text != original:
             path.write_text(text, encoding="utf-8")
             patched.append(path.relative_to(destination).as_posix())
+    for editor in ("documenteditor", "spreadsheeteditor", "presentationeditor"):
+        app = engine / "web-apps/apps" / editor / "main/app.js"
+        app.write_text(patch_desktop_app(app.read_text(encoding="utf-8"), editor), encoding="utf-8")
+        patched.append(app.relative_to(destination).as_posix())
     api = engine / "web-apps/apps/api/documents/api.js"
     text = api.read_text(encoding="utf-8")
     text = replace_once(text, "// TODO: check message origin", "// 本地只读桥只接收当前编辑器窗口。")
@@ -225,9 +255,10 @@ def install(archive, source, destination, source_output=None):
                                      "可使用 --source-output 在运行目录之外生成 upstream-source.zip 并另行发布，"
                                      "同时向接收者提供真实获取方式。此清单不表示对应源码已对外发布。",
                 "runtimeExclusions": ["所有 *.map（扩展名不区分大小写）",
-                                      "web-apps/apps/*/**/resources/help/** 仅保留 Contents.json 与许可、notice、copying、copyright 文件"],
+                                      "web-apps/apps/*/**/resources/help/** 仅保留 Contents.json 与许可、notice、copying、copyright 文件",
+                                      "v9.3.0.24-1/web-apps/apps/{documenteditor,spreadsheeteditor,presentationeditor}/main/ie/{app.js,code.js}（六个 IE bundle；保留法律通知）"],
                 "installer": "scripts/install-office-assets.py", "patchedFiles": patched,
-                "changes": ["远程 HTML base 改为本地单端口路径", "预装子页自有只读通信桥，禁止父页写入 iframe DOM", "DocsAPI 固定消息来源、窗口与目标来源", "编辑器 iframe 关闭摄像头、麦克风与写剪贴板授权"],
+                "changes": ["远程 HTML base 改为本地单端口路径", "预装子页自有只读通信桥，禁止父页写入 iframe DOM", "DocsAPI 固定消息来源、窗口与目标来源", "编辑器 iframe 关闭摄像头、麦克风与写剪贴板授权", "三个桌面编辑器 index.html 直接加载现代 app，不加载 IE 专用兼容脚本；main/app.js 固定现代 code 入口（仅支持现代浏览器，不提供备用 loader/internal 入口的 IE 模式）"],
                 "runtime": "Python 标准库单服务；浏览器本地 WebAssembly 转换；不运行 npm、Next.js 或远程文档服务"}
     if source_output is not None:
         package_source(source, destination, source_output, manifest)

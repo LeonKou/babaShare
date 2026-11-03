@@ -133,6 +133,22 @@ test("HTML只使用opaque沙箱，可信Monaco固定入口独立授权", async (
   assert.equal(app.events.has("message"), false);
   assert(app.sent.some((message) => message[0].type === "preview-code.dispose"));
 });
+test("PDF保留原生blob预览，不加载Office或误报渲染回执，关闭释放资源", async () => {
+  const app = environment(async () => response("%PDF-1.4\nsynthetic PDF bytes")), view = app.create(new app.Element("host"));
+  app.context.API = async () => assert.fail("原生PDF没有可信渲染回执");
+  await view.load({ name: "report.pdf", url, onboardingTicket: "memory-only" });
+  const frame = app.nodes.find((node) => node.tag === "iframe");
+  assert.equal(app.classify("report.PDF").mime, "application/pdf");
+  assert.equal(app.classify("report.pdf").limit, 64 * 1024 * 1024);
+  assert.equal(frame.src, "blob:http://localhost/fixed");
+  assert.equal(app.nodes.some((node) => node.src === "/baba-share/preview-office.html"), false);
+  assert.equal(app.events.has("message"), false);
+  frame.events.get("load")();
+  assert.equal(app.nodes.find((node) => node.classList.contains("status-line")).hidden, true);
+  view.dispose();
+  assert.equal(frame.src, "about:blank");
+  assert.deepEqual(app.revoked, ["blob:http://localhost/fixed"]);
+});
 test("切换与销毁暂停音视频、撤销blob且清空iframe", async () => {
   const app = environment(), view = app.create(new app.Element("host"));
   await view.load({ name: "movie.mp4", url });

@@ -45,6 +45,12 @@ test("Office引擎拒绝远程、API和所有写请求，仅允许本地资源�
   await app.context.fetch("blob:http://localhost/sample");
   assert.equal(app.calls(), 2);
 });
+test("Office适配器保留中英阿文映射与只读桌面入口", () => {
+  const source = fs.readFileSync(path.join(root, "assets/preview-office.js"), "utf8");
+  assert.match(source, /"zh-CN": "zh", "en-US": "en", "ar-SA": "ar"/);
+  assert.match(source, /type: "desktop"/);
+  assert.match(source, /mode: "view"/);
+});
 test("Office适配器硬编码只读配置、上下文白名单和资源释放，不读写父或子DOM", () => {
   const source = fs.readFileSync(path.join(root, "assets/preview-office.js"), "utf8");
   assert.match(source, /mode: "view"/);

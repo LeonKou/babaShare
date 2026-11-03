@@ -91,7 +91,9 @@
 
 Office 使用 `office-website v9.3.0.24` 的本地静态依赖，资源目录为 `web/vendor/office/`。运行时仍只启动现有 Python 服务，不启动 Next.js、npm、Office 文档服务或额外端口。浏览器在专用 worker 中使用 x2t WebAssembly 转换，再交给本地 SDK 只读展示；文件不发送给第三方转换服务。部署应保留当前裁剪后的运行资源、许可证与 `build-manifest.json`，不能只复制 `x2t.wasm`，也不能只复制前端适配脚本。运行目录不携带上游开发工程和源码 ZIP；页面保留独立源码获取入口。发布者仍须提供确切版本的完整对应源码，不能以普通仓库首页替代，也不能在重写 Git 历史时让现有源码入口失效。
 
-Office 发行 ZIP 大小为 `606149075` 字节，固定 SHA256 为 `0b91dcd9772d46effc7512681e4b5d1a41322dd06c6063c5bd21f509f1daf69b`；原始完整安装资源含大量帮助图文及调试文件；当前分发排除源码 ZIP、`.map` 和禁用帮助界面的图文，保留帮助目录索引与法律通知，安装体积以当前文件统计为准。安装脚本默认仅产出运行文件，需要制作对应源码发布物时可显式传 `--source-output` 指定运行目录之外的位置。**发行包大小、部署磁盘增量和首次打开文档的网络传输量是不同指标**：普通列表不下载整套引擎，打开相应格式后才按需请求组件与字体。不要把完整发行包大小当成每次预览流量。
+Office 发行 ZIP 大小为 `606149075` 字节，固定 SHA256 为 `0b91dcd9772d46effc7512681e4b5d1a41322dd06c6063c5bd21f509f1daf69b`；原始完整安装资源含大量帮助图文及调试文件；当前分发已移出源码 ZIP、排除 `.map`，并移除三个桌面编辑器六个 IE app/code bundle（共 `9,735,967` 字节，约 `9.29 MiB`）。installer 新安装还过滤禁用帮助界面的图文，保留帮助目录索引与法律通知；但当前存量 `669` 个 help 文件（`9,038,861` 字节）此前触发删除保护仍保留，未重试或换手段删除，不能把过滤规则当成实际已全部移除。安装体积以当前文件统计为准。安装脚本默认仅产出运行文件，需要制作对应源码发布物时可显式传 `--source-output` 指定运行目录之外的位置。**发行包大小、部署磁盘增量和首次打开文档的网络传输量是不同指标**：普通列表不下载整套引擎，打开相应格式后才按需请求组件与字体。不要把完整发行包大小当成每次预览流量。
+
+本轮 IE 裁剪仅限 `documenteditor`、`spreadsheeteditor`、`presentationeditor` 的 `main/ie/app.js` 与 `code.js`。固定适配器使用 `type: desktop`、`mode: view`，未配置 `toolbarNoTabs`、`loaderName`、`loaderLogo` 或内部编辑模式，因此 DocsAPI 走三类 `main/index.html`；这些 HTML 与 `main/app.js` 均已改为现代 app/code。上游备用 loader/internal HTML 仍保留，但不提供它们的 IE 模式，不宣称整个上游产品均受支持。共享 IE 兼容脚本未删除。Visio 仍有 API 预加载引用，mobile/embed 未在本轮切除其入口，因此全部保留。PDF 仍走 `preview.js` 的原生 `application/pdf` Blob/iframe，不依赖上述 IE bundle；Office SDK 的 PDF 共享资源、中英阿文、RTL、现有字体及所有法律通知均未裁减。自动测试不等于真实 DOCX/XLSX/PPTX/PDF 版式和字体验收，发布前仍需在目标浏览器验证。
 
 x2t 的固定 JS/WASM 文件沿用上游 Brotli 编码，由应用对精确路径返回 `Content-Encoding: br` 和相应 MIME，Python 无需 Brotli 第三方库。反向代理不得剥离该编码头或重复压缩这些文件；若由代理单独托管静态资源，必须同步对应编码与内容类型，但不应把 `filedb/` 映射为公开目录。
 

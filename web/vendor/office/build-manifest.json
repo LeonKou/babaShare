@@ -15,19 +15,28 @@
   "sourceRepository": "https://github.com/baotlake/office-website",
   "sourcePublication": "运行目录不携带源码。上游固定提交及本地集成源码分别由上游仓库和本项目仓库提供；先前源码参考归档已移至独立 Release 附件 sourceOfferUrl，不占主仓库历史。该参考归档尚未验证覆盖所有底层引擎构建源码，发布者仍须履行完整对应源码提供义务。",
   "sourceOfferUrl": "https://github.com/LeonKou/babaShare/releases/download/office-source-v9.3.0.24/upstream-source.zip",
-  "runtimeExclusions": ["*.map", "web-apps/apps/*/**/resources/help/**（保留 Contents.json 与法律通知）"],
+  "runtimeExclusions": [
+    "所有 *.map（扩展名不区分大小写）",
+    "web-apps/apps/*/**/resources/help/** 仅保留 Contents.json 与许可、notice、copying、copyright 文件",
+    "v9.3.0.24-1/web-apps/apps/{documenteditor,spreadsheeteditor,presentationeditor}/main/ie/{app.js,code.js}（六个 IE bundle；保留法律通知）"
+  ],
+  "runtimeExclusionStatus": "runtimeExclusions 描述 installer 的新安装规则，不表示存量已全部移除。本次已删除六个 IE bundle，共 9735967 字节；此前删除受保护的 669 个 help 文件共 9038861 字节仍保留，未重试或绕过保护。PDF、Visio、mobile/embed、所有语言与字体资源保留。",
   "installer": "scripts/install-office-assets.py",
   "patchedFiles": [
     "v9.3.0.24-1/web-apps/apps/spreadsheeteditor/main/index.html",
     "v9.3.0.24-1/web-apps/apps/presentationeditor/main/index.html",
     "v9.3.0.24-1/web-apps/apps/documenteditor/main/index.html",
-    "v9.3.0.24-1/web-apps/apps/api/documents/api.js"
+    "v9.3.0.24-1/web-apps/apps/api/documents/api.js",
+    "v9.3.0.24-1/web-apps/apps/documenteditor/main/app.js",
+    "v9.3.0.24-1/web-apps/apps/spreadsheeteditor/main/app.js",
+    "v9.3.0.24-1/web-apps/apps/presentationeditor/main/app.js"
   ],
   "changes": [
     "远程 HTML base 改为本地单端口路径",
     "预装子页自有只读通信桥，禁止父页写入 iframe DOM",
     "DocsAPI 固定消息来源、窗口与目标来源",
-    "编辑器 iframe 关闭摄像头、麦克风与写剪贴板授权"
+    "编辑器 iframe 关闭摄像头、麦克风与写剪贴板授权",
+    "三个桌面编辑器 index.html 直接加载现代 app，不加载 IE 专用兼容脚本；main/app.js 固定现代 code 入口（仅支持现代浏览器，不提供备用 loader/internal 入口的 IE 模式）"
   ],
   "runtime": "Python 标准库单服务；浏览器本地 WebAssembly 转换；不运行 npm、Next.js 或远程文档服务"
 }
