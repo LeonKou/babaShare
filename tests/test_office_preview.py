@@ -1,4 +1,5 @@
 """Office静态引擎策略与上传HTML沙箱互不放宽。"""
+import hashlib
 import http.client
 import importlib.util
 import io
@@ -28,6 +29,214 @@ class OfficeInstallerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.installer.replace_once(text, "old", "new")
 
+    def make_release_fixture(self, root):
+        source = root / "source"
+        source.mkdir()
+        for name, content in {
+            "LICENSE.txt": b"synthetic upstream license",
+            "utils/editor/server.ts": b"synthetic upstream source",
+            "public/x2t-1/x2t.js": b"synthetic converter script",
+            "public/x2t-1/x2t.wasm": b"synthetic converter binary",
+            "public/x2t-1/x2t.js.map": b"excluded converter map",
+            "public/x2t-1/nested/debug.MAP": b"excluded nested converter map",
+            "public/x2t-1/runtime.map/dependency.js": b"synthetic runtime dependency",
+            "public/x2t-1/_headers": b"synthetic converter headers",
+            "public/x2t-1/ThirdPartyNotices.txt": b"synthetic converter notices",
+        }.items():
+            path = source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        engine = "v9.3.0.24-1/"
+        api = (b'// TODO: check message origin\n_scope.frameOrigin==msg.origin\n'
+               b'wnd.postMessage(msg, "*", [buffer])\n'
+               b'wnd.postMessage(window.JSON.stringify(msg), "*")\n'
+               b'iframe.setAttribute("allow", "autoplay; camera; microphone; display-capture; clipboard-write;");')
+        retained = {
+            engine + "web-apps/apps/api/documents/api.js": api,
+            engine + "fonts/arial.ttf": b"synthetic font",
+            engine + "fonts/LICENSE.txt": b"synthetic font license",
+            engine + "sdkjs/common/src/runtime.js": b"synthetic SDK dependency",
+            engine + "sdkjs/word/sdk-all.js": b"synthetic SDK bundle",
+            engine + "sdkjs/LICENSE": b"synthetic SDK license",
+            engine + "web-apps/vendor/monaco/ThirdPartyNotices.txt": b"synthetic vendor notices",
+            engine + "web-apps/apps/common/main/resources/images/icon.png": b"synthetic UI image",
+            engine + "web-apps/apps/common/main/resources/help/en/Contents.json": b"[]",
+            engine + "web-apps/apps/common/main/resources/help/en/LICENSE.txt": b"synthetic help license",
+            engine + "web-apps/apps/common/main/resources/help/NOTICE.html": b"synthetic help notice",
+            engine + "web-apps/apps/common/main/resources/help/COPYING": b"synthetic help terms",
+            engine + "web-apps/apps/common/main/resources/help/COPYRIGHT": b"synthetic help attribution",
+        }
+        excluded = {
+            "release.MAP": b"excluded top-level map",
+            engine + "sdkjs/word/sdk-all.js.map": b"excluded SDK map",
+            engine + "fonts/debug.map": b"excluded font map",
+            engine + "web-apps/apps/common/main/resources/help/en/guide.html": b"excluded help page",
+            engine + "web-apps/apps/common/main/resources/help/en/images/guide.png": b"excluded help image",
+            engine + "web-apps/apps/common/main/resources/help/LICENSE.txt.map": b"excluded notice map",
+        }
+        for editor in ("documenteditor", "spreadsheeteditor", "presentationeditor"):
+            app = engine + "web-apps/apps/" + editor + "/"
+            retained.update({
+                app + "main/index.html": b'<html><head><base href="https://office-editor.ziziyi.com/"></head></html>',
+                app + "main/app.css": b"synthetic desktop CSS",
+                app + "main/app.js": b"synthetic desktop JS",
+                app + "main/resources/help/en/Contents.json": b"[]",
+                app + "main/resources/help/licensing-notice.txt": b"synthetic help licensing notice",
+                app + "mobile/index.html": b"<html><head></head></html>",
+                app + "mobile/dist/js/app.js": b"synthetic mobile JS",
+                app + "mobile/dist/js/app.js.LICENSE.txt": b"synthetic mobile license",
+            })
+            excluded.update({
+                app + "main/app.js.map": b"excluded desktop map",
+                app + "main/app.css.map": b"excluded CSS map",
+                app + "main/resources/help/en/guide.html": b"excluded editor help",
+                app + "main/resources/help/en/images/guide.svg": b"excluded editor help image",
+                app + "mobile/dist/js/app.js.map": b"excluded mobile map",
+            })
+        archive = root / "release.zip"
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+            for name, content in {**retained, **excluded}.items():
+                bundle.writestr("release/" + name, content)
+        return archive, source, retained, excluded
+
+    def install_fixture(self, archive, source, destination, source_output=None):
+        converter_hashes = {name: hashlib.sha256((source / "public/x2t-1" / name).read_bytes()).hexdigest()
+                            for name in ("x2t.js", "x2t.wasm")}
+        with patch.object(self.installer, "ARCHIVE_SIZE", archive.stat().st_size), \
+                patch.object(self.installer, "ARCHIVE_SHA256", hashlib.sha256(archive.read_bytes()).hexdigest()), \
+                patch.object(self.installer, "CONVERTER_SHA256", converter_hashes):
+            self.installer.install(archive, source, destination, source_output)
+
+    def test_default_install_filters_before_reading_and_preserves_runtime_dependencies(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, source, retained, excluded = self.make_release_fixture(root)
+            destination = root / "runtime"
+            original_open = zipfile.ZipFile.open
+            opened_members = []
+
+            def open_member(bundle, member, *args, **kwargs):
+                name = member.filename if isinstance(member, zipfile.ZipInfo) else member
+                opened_members.append(name)
+                return original_open(bundle, member, *args, **kwargs)
+
+            with patch.object(zipfile.ZipFile, "open", open_member), \
+                    patch.object(self.installer, "package_source") as package_source:
+                self.install_fixture(archive, source, destination)
+            package_source.assert_not_called()
+            self.assertTrue(opened_members)
+            self.assertFalse(set(opened_members) & {"release/" + name for name in excluded})
+            engine = "v9.3.0.24-1/"
+            patched = {engine + "web-apps/apps/api/documents/api.js"}
+            for editor in ("documenteditor", "spreadsheeteditor", "presentationeditor"):
+                name = engine + "web-apps/apps/" + editor + "/main/index.html"
+                patched.add(name)
+                html = (destination / name).read_text(encoding="utf-8")
+                self.assertIn(self.installer.BRIDGE, html)
+                self.assertIn(self.installer.RESOURCE_ROOT, html)
+            for name, content in retained.items():
+                with self.subTest(retained=name):
+                    self.assertTrue((destination / name).is_file())
+                    if name not in patched:
+                        self.assertEqual((destination / name).read_bytes(), content)
+            for name in excluded:
+                with self.subTest(excluded=name):
+                    self.assertFalse((destination / name).exists())
+            for name in ("x2t.js", "x2t.wasm", "_headers", "ThirdPartyNotices.txt", "runtime.map/dependency.js"):
+                self.assertEqual((destination / "x2t-1" / name).read_bytes(),
+                                 (source / "public/x2t-1" / name).read_bytes())
+            self.assertEqual((destination / "LICENSE").read_bytes(), (source / "LICENSE.txt").read_bytes())
+            runtime_files = {path.relative_to(destination).as_posix()
+                             for path in destination.rglob("*") if path.is_file()}
+            self.assertEqual(runtime_files, {*retained, "LICENSE", "build-manifest.json",
+                                            *("x2t-1/" + name for name in
+                                              ("x2t.js", "x2t.wasm", "_headers", "ThirdPartyNotices.txt",
+                                               "runtime.map/dependency.js"))})
+            self.assertFalse(list(destination.rglob("*.zip")))
+            manifest = json.loads((destination / "build-manifest.json").read_text(encoding="utf-8"))
+            self.assertIsNone(manifest["sourceArchive"])
+            self.assertEqual(manifest["sourceCommit"], self.installer.SOURCE_COMMIT)
+            self.assertEqual(manifest["sourceRepository"], manifest["repository"])
+            self.assertIn("--source-output", manifest["sourcePublication"])
+            self.assertIn("不表示对应源码已对外发布", manifest["sourcePublication"])
+            self.assertEqual(set(manifest["patchedFiles"]), patched)
+            repeated = root / "repeated-runtime"
+            self.install_fixture(archive, source, repeated)
+            for name in runtime_files:
+                self.assertEqual((destination / name).read_bytes(), (repeated / name).read_bytes(), name)
+
+    def test_explicit_source_output_is_separate_and_contains_corresponding_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, source, _, _ = self.make_release_fixture(root)
+            destination, output = root / "runtime", root / "publication/source"
+            self.install_fixture(archive, source, destination, output)
+            self.assertFalse(list(destination.rglob("*.zip")))
+            with zipfile.ZipFile(output / "upstream-source.zip") as bundle:
+                manifest = json.loads(bundle.read("baba-share-integration/build-manifest.json"))
+                self.assertIsNone(manifest["sourceArchive"])
+                self.assertEqual(bundle.read("office-website/utils/editor/server.ts"),
+                                 (source / "utils/editor/server.ts").read_bytes())
+                for name in manifest["patchedFiles"]:
+                    self.assertEqual(bundle.read("baba-share-integration/web/vendor/office/" + name),
+                                     (destination / name).read_bytes())
+
+    def test_source_output_rejects_runtime_directory_and_descendants_before_install(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destination = root / "runtime"
+            for output in (destination, destination / "source", destination / "nested/../source"):
+                with self.subTest(output=output):
+                    with self.assertRaisesRegex(ValueError, "源码输出目录不得"):
+                        self.installer.install(root / "missing.zip", root / "source", destination, output)
+                    with self.assertRaisesRegex(ValueError, "源码输出目录不得"):
+                        self.installer.package_source(root / "source", destination, output)
+                    self.assertFalse(destination.exists())
+
+    def test_source_output_rejects_resolved_alias_into_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destination, alias = root / "runtime", root / "alias"
+            destination.mkdir()
+            try:
+                alias.symlink_to(destination, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("当前环境无创建符号链接权限")
+            with self.assertRaisesRegex(ValueError, "源码输出目录不得"):
+                self.installer.package_source(root / "source", destination, alias / "source")
+            self.assertFalse(list(destination.iterdir()))
+
+    def test_existing_source_archive_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, destination, output = root / "source", root / "runtime", root / "publication"
+            source.mkdir()
+            output.mkdir()
+            archive = output / "upstream-source.zip"
+            archive.write_bytes(b"existing source archive")
+            with self.assertRaisesRegex(ValueError, "源码输出文件已存在"):
+                self.installer.install(root / "missing.zip", source, destination, output)
+            with self.assertRaises(FileExistsError):
+                self.installer.package_source(source, destination, output)
+            self.assertEqual(archive.read_bytes(), b"existing source archive")
+            self.assertFalse(destination.exists())
+
+    def test_runtime_filter_is_limited_to_maps_and_app_help(self):
+        for name in ("fonts/src/font.ttf", "sdkjs/common/src/dependency.js",
+                     "web-apps/apps/documenteditor/mobile/dist/js/app.js",
+                     "other/resources/help/guide.html", "web-apps/vendor/resources/help/guide.html",
+                     "web-apps/apps/common/main/resources/helpful/guide.html",
+                     "web-apps/apps/common/main/resources/help/en/Contents.json",
+                     "web-apps/apps/common/main/resources/help/en/ThirdPartyNotices.txt",
+                     "web-apps/apps/common/main/resources/help/en/LICENCE.md"):
+            with self.subTest(retained=name):
+                self.assertTrue(self.installer.include_runtime_member(name))
+        for name in ("app.js.map", "APP.CSS.MAP",
+                     "web-apps/apps/common/main/resources/help/en/guide.html",
+                     "web-apps/apps/common/main/resources/help/en/images/icon.png"):
+            with self.subTest(excluded=name):
+                self.assertFalse(self.installer.include_runtime_member(name))
+
     def test_source_archive_contains_direct_dependencies_and_actual_patched_api(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -37,8 +246,8 @@ class OfficeInstallerTests(unittest.TestCase):
             (source / "LICENSE.txt").write_text("license", encoding="utf-8")
             (destination / "api.js").write_text("patched source", encoding="utf-8")
             (destination / "build-manifest.json").write_text(json.dumps({"patchedFiles": ["api.js"]}), encoding="utf-8")
-            self.installer.package_source(source, destination)
-            with zipfile.ZipFile(destination / "upstream-source.zip") as bundle:
+            self.installer.package_source(source, destination, root / "source-output")
+            with zipfile.ZipFile(root / "source-output/upstream-source.zip") as bundle:
                 for name in ("i18n.js", "boot.js", "tokens.css", "components.css"):
                     archived = bundle.read("baba-share-integration/web/assets/" + name)
                     local = (Path(__file__).resolve().parents[1] / "web/assets" / name).read_bytes()
@@ -65,8 +274,8 @@ class OfficeInstallerTests(unittest.TestCase):
             destination.mkdir()
             sample = source / "example.xlsx"
             sample.write_bytes(original.getvalue())
-            self.installer.package_source(source, destination)
-            with zipfile.ZipFile(destination / "upstream-source.zip") as archive:
+            self.installer.package_source(source, destination, root / "source-output")
+            with zipfile.ZipFile(root / "source-output/upstream-source.zip") as archive:
                 sanitized = archive.read("office-website/example.xlsx")
             with zipfile.ZipFile(io.BytesIO(sanitized)) as bundle:
                 self.assertEqual(bundle.comment, b"preserve archive comment")
@@ -103,8 +312,8 @@ class OfficeInstallerTests(unittest.TestCase):
                 path = source / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("temporary fixture", encoding="utf-8")
-            self.installer.package_source(source, destination)
-            with zipfile.ZipFile(destination / "upstream-source.zip") as bundle:
+            self.installer.package_source(source, destination, root / "source-output")
+            with zipfile.ZipFile(root / "source-output/upstream-source.zip") as bundle:
                 upstream = {name.removeprefix("office-website/") for name in bundle.namelist()
                             if name.startswith("office-website/")}
                 self.assertEqual(upstream, set(allowed))
@@ -123,8 +332,8 @@ class OfficeInstallerTests(unittest.TestCase):
                     with self.subTest(link_type=link_type, linked=linked.name):
                         with patch.object(Path, link_type, lambda path: path == linked):
                             with self.assertRaisesRegex(ValueError, "符号链接或目录联接"):
-                                self.installer.package_source(source, destination)
-                        self.assertFalse((destination / "upstream-source.zip").exists())
+                                self.installer.package_source(source, destination, root / "source-output")
+                        self.assertFalse((root / "source-output/upstream-source.zip").exists())
 
     def test_source_archive_does_not_read_through_real_symlinks(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -141,8 +350,8 @@ class OfficeInstallerTests(unittest.TestCase):
             except (OSError, NotImplementedError):
                 self.skipTest("当前环境无创建符号链接权限")
             with self.assertRaisesRegex(ValueError, "符号链接或目录联接"):
-                self.installer.package_source(source, destination)
-            self.assertFalse((destination / "upstream-source.zip").exists())
+                self.installer.package_source(source, destination, root / "source-output")
+            self.assertFalse((root / "source-output/upstream-source.zip").exists())
 
 
 class OfficePreviewTests(unittest.TestCase):

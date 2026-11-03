@@ -11,7 +11,11 @@
     "x2t.wasm": "b15914a9cad355734503417a3b1e313971de73760ec34f5e698104250cbd023a"
   },
   "license": "AGPL-3.0",
-  "sourceArchive": "upstream-source.zip",
+  "sourceArchive": null,
+  "sourceRepository": "https://github.com/baotlake/office-website",
+  "sourcePublication": "运行目录不携带源码。上游固定提交及本地集成源码分别由上游仓库和本项目仓库提供；先前源码参考归档已移至独立 Release 附件 sourceOfferUrl，不占主仓库历史。该参考归档尚未验证覆盖所有底层引擎构建源码，发布者仍须履行完整对应源码提供义务。",
+  "sourceOfferUrl": "https://github.com/LeonKou/babaShare/releases/download/office-source-v9.3.0.24/upstream-source.zip",
+  "runtimeExclusions": ["*.map", "web-apps/apps/*/**/resources/help/**（保留 Contents.json 与法律通知）"],
   "installer": "scripts/install-office-assets.py",
   "patchedFiles": [
     "v9.3.0.24-1/web-apps/apps/spreadsheeteditor/main/index.html",

@@ -100,7 +100,8 @@ test("Office加载成功隐藏状态，工具栏收起且许可证入口仍可�
   assert.equal(app.sent.at(-1).type, "preview-office.loaded");
   const html = fs.readFileSync(path.join(root, "preview-office.html"), "utf8");
   assert.match(html, /<details class="office-preview-license">/);
-  assert.match(html, /href="vendor\/office\/upstream-source\.zip" download data-i18n="previewOfficeSource"/);
+  assert.match(html, /href="https:\/\/github\.com\/LeonKou\/babaShare\/releases\/download\/office-source-v9\.3\.0\.24\/upstream-source\.zip"[^>]+data-i18n="previewOfficeSource"/);
+  assert.match(html, /href="vendor\/office\/LICENSE"/);
 });
 test("Office转换错误和超时真正终止Worker并拒绝迟到结果", () => {
   for (const trigger of ["error", "timeout"]) {
@@ -159,8 +160,9 @@ test("DocsAPI实际补丁绑定来源窗口且不使用通配目标", () => {
   assert.match(source, /wnd\.postMessage\(msg, location\.origin, \[buffer\]\)/);
   assert.match(source, /iframe\.setAttribute\("sandbox", "allow-scripts allow-same-origin"\)/);
 });
-test("完整Office依赖与固定来源、许可证、对应源码和构建记录齐备", () => {
-  for (const file of ["x2t-1/x2t.js", "x2t-1/x2t.wasm", "v9.3.0.24-1/web-apps/apps/api/documents/api.js", "v9.3.0.24-1/sdkjs", "v9.3.0.24-1/fonts", "LICENSE", "upstream-source.zip", "build-manifest.json"]) {
+test("Office运行依赖、许可证及独立源码入口齐备且不附带源码包", () => {
+  assert.equal(fs.existsSync(path.join(root, "vendor/office/upstream-source.zip")), false);
+  for (const file of ["x2t-1/x2t.js", "x2t-1/x2t.wasm", "v9.3.0.24-1/web-apps/apps/api/documents/api.js", "v9.3.0.24-1/sdkjs", "v9.3.0.24-1/fonts", "LICENSE", "build-manifest.json"]) {
     assert(fs.existsSync(path.join(root, "vendor/office", file)), file);
   }
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "vendor/office/build-manifest.json"), "utf8"));

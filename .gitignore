@@ -6,6 +6,10 @@
 .env.*
 !.env.example
 
+# Office runtime excludes source archives and debug maps
+/web/vendor/office/upstream-source.zip
+/web/vendor/office/**/*.map
+
 # Python runtime
 __pycache__/
 *.py[cod]

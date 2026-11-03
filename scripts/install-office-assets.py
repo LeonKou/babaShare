@@ -48,7 +48,28 @@ def sanitize_source_member(name, content):
         return output.getvalue()
 
 
-def package_source(source, destination, manifest=None):
+def validate_source_output(destination, source_output):
+    if source_output.resolve().is_relative_to(destination.resolve()):
+        raise ValueError("源码输出目录不得位于 destination 运行目录内")
+
+
+def include_runtime_member(name):
+    path = Path(name)
+    if path.suffix.lower() == ".map":
+        return False
+    parts = path.parts
+    # 只裁剪 web-apps/apps 下的帮助目录，不按 src/mobile 等名字推测运行依赖。
+    for index in range(len(parts) - 2):
+        if parts[index:index + 2] == ("web-apps", "apps"):
+            for help_index in range(index + 3, len(parts) - 1):
+                if parts[help_index:help_index + 2] == ("resources", "help"):
+                    return path.name == "Contents.json" or bool(re.search(
+                        r"licen[cs]|notice|copying|copyright", path.name, re.IGNORECASE))
+    return True
+
+
+def package_source(source, destination, source_output, manifest=None):
+    validate_source_output(destination, source_output)
     project = Path(__file__).resolve().parents[1]
     excluded_directories = {
         ".git", ".workbuddy", ".claude", ".codex", ".cursor", ".idea", ".vscode",
@@ -83,7 +104,8 @@ def package_source(source, destination, manifest=None):
                 continue
             if path.is_file():
                 source_files.append(path)
-    with zipfile.ZipFile(destination / "upstream-source.zip", "w", zipfile.ZIP_DEFLATED) as bundle:
+    source_output.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(source_output / "upstream-source.zip", "x", zipfile.ZIP_DEFLATED) as bundle:
         for path in source_files:
             archive_name = "office-website/" + path.relative_to(source).as_posix()
             if path.suffix.lower() in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
@@ -106,7 +128,11 @@ def package_source(source, destination, manifest=None):
                 bundle.write(destination / name, "baba-share-integration/web/vendor/office/" + name)
 
 
-def install(archive, source, destination):
+def install(archive, source, destination, source_output=None):
+    if source_output is not None:
+        validate_source_output(destination, source_output)
+        if (source_output / "upstream-source.zip").exists():
+            raise ValueError("源码输出文件已存在，拒绝覆盖")
     if archive.stat().st_size != ARCHIVE_SIZE:
         raise ValueError("Office 发行包大小不符")
     with archive.open("rb") as reader:
@@ -145,13 +171,18 @@ def install(archive, source, destination):
             target = destination / relative
             if not target.resolve().is_relative_to(destination.resolve()):
                 raise ValueError("发行包包含越界路径")
+            if not include_runtime_member(relative.as_posix()):
+                continue
             target.parent.mkdir(parents=True, exist_ok=True)
             with bundle.open(item) as reader, target.open("wb") as writer:
                 shutil.copyfileobj(reader, writer)
     # 固定发行包提供 SDK/web-apps/fonts；x2t-1 由同一固定 tag 源码仓库提供。
     if not (source / "public/x2t-1/x2t.js").is_file() or not (source / "public/x2t-1/x2t.wasm").is_file():
         raise ValueError("固定 tag 源码缺少 x2t-1 转换器")
-    shutil.copytree(source / "public/x2t-1", destination / "x2t-1")
+    shutil.copytree(source / "public/x2t-1", destination / "x2t-1",
+                    ignore=lambda directory, names: [name for name in names
+                                                     if (Path(directory) / name).is_file()
+                                                     and not include_runtime_member(name)])
     engine = destination / "v9.3.0.24-1"
     required = [destination / "x2t-1/x2t.js", destination / "x2t-1/x2t.wasm", engine / "web-apps/apps/api/documents/api.js", engine / "sdkjs", engine / "fonts"]
     for path in required:
@@ -180,18 +211,26 @@ def install(archive, source, destination):
     api.write_text(text, encoding="utf-8")
     patched.append(api.relative_to(destination).as_posix())
     shutil.copyfile(license_file, destination / "LICENSE")
-    # 保存完整固定 tag 与本地改动源码，不带 .git、个人环境或任何用户文件。
+    # 运行产物仅记录源码出处；对应源码由发布者独立提供。
     manifest = {"version": VERSION, "sourceCommit": SOURCE_COMMIT,
+                "sourceRepository": "https://github.com/baotlake/office-website",
                 "repository": "https://github.com/baotlake/office-website",
                 "release": "https://github.com/baotlake/office-website/releases/download/v9.3.0.24/public-260304.zip",
                 "archiveBytes": ARCHIVE_SIZE, "archiveSha256": checksum,
                 "converterSource": "office-website 固定 sourceCommit 的 public/x2t-1（Brotli，沿用上游 _headers）",
                 "converterSha256": {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in (destination / "x2t-1").iterdir() if path.is_file()},
-                "license": "AGPL-3.0", "sourceArchive": "upstream-source.zip",
+                "license": "AGPL-3.0", "sourceArchive": None,
+                "sourcePublication": "运行目录不附带源码包。发布者须按 AGPL-3.0 要求提供对应源码，"
+                                     "包括 sourceRepository 的 sourceCommit 版本、本地集成源码与补丁；"
+                                     "可使用 --source-output 在运行目录之外生成 upstream-source.zip 并另行发布，"
+                                     "同时向接收者提供真实获取方式。此清单不表示对应源码已对外发布。",
+                "runtimeExclusions": ["所有 *.map（扩展名不区分大小写）",
+                                      "web-apps/apps/*/**/resources/help/** 仅保留 Contents.json 与许可、notice、copying、copyright 文件"],
                 "installer": "scripts/install-office-assets.py", "patchedFiles": patched,
                 "changes": ["远程 HTML base 改为本地单端口路径", "预装子页自有只读通信桥，禁止父页写入 iframe DOM", "DocsAPI 固定消息来源、窗口与目标来源", "编辑器 iframe 关闭摄像头、麦克风与写剪贴板授权"],
                 "runtime": "Python 标准库单服务；浏览器本地 WebAssembly 转换；不运行 npm、Next.js 或远程文档服务"}
-    package_source(source, destination, manifest)
+    if source_output is not None:
+        package_source(source, destination, source_output, manifest)
     (destination / "build-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
@@ -200,5 +239,8 @@ if __name__ == "__main__":
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--destination", type=Path, default=Path(__file__).resolve().parents[1] / "web/vendor/office")
+    parser.add_argument("--source-output", type=Path,
+                        help="显式生成对应源码包的独立目录，不能位于 --destination 运行目录内；默认不打包源码")
     args = parser.parse_args()
-    install(args.archive.resolve(), args.source.resolve(), args.destination.resolve())
+    install(args.archive.resolve(), args.source.resolve(), args.destination.resolve(),
+            args.source_output.resolve() if args.source_output is not None else None)
