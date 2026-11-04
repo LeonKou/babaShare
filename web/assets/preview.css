@@ -92,6 +92,26 @@ dialog.file-preview-page::backdrop { background: var(--color-bg-page); }
 .code-preview-editor { flex: 1; min-block-size: 0; min-inline-size: 0; }
 .file-preview :focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: -2px; }
 .share-stage > .file-preview { min-block-size: 0; }
+html[data-share-view="file"] :is(.share-topbar, .share-sidebar, .preview-bar),
+.share-file-view :is(.share-topbar, .share-sidebar, .preview-bar, .share-tree-edge) { display: none; }
+.share-file-view .share-layout { display: block; position: relative; min-block-size: 0; }
+.share-file-view .share-stage { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; }
+.share-file-view .file-preview-body > .preview-frame { min-block-size: 0; }
+.share-file-view #share-status:empty, .share-file-view .file-preview > .status-line:empty { display: none; }
+.file-tree .share-file-row { display: flex; align-items: center; gap: var(--space-1); min-inline-size: 0; }
+.file-tree .share-file-row > button { flex: 1; min-inline-size: 0; color: var(--color-menu-text); }
+.file-tree .share-file-row > button:hover { background: var(--color-menu-hover-bg); color: var(--color-menu-hover-text); }
+.file-tree .share-file-row > button:active { background: var(--color-menu-active-bg); color: var(--color-menu-active-text); }
+.file-tree .share-file-row > button[aria-current="page"] { background: var(--color-primary); color: var(--color-on-primary); }
+.file-tree .share-file-row > button[aria-current="page"]:is(:hover, :active) { filter: brightness(.92); }
+.file-tree .share-file-row > button:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: -2px; }
+.file-tree .share-file-menu { align-self: center; }
+.file-tree .share-file-menu > summary { padding: 0; color: var(--color-menu-text); }
+.share-file-menu .card-action-popover > a { display: flex; align-items: center; min-block-size: 32px; flex-shrink: 0; padding-inline: var(--space-3); color: var(--color-menu-text); text-decoration: none; text-align: start; }
+.share-file-menu .card-action-popover > a:hover { background: var(--color-menu-hover-bg); color: var(--color-menu-hover-text); }
+.share-file-menu .card-action-popover > a:active { background: var(--color-menu-active-bg); color: var(--color-menu-active-text); }
+.share-file-menu .card-action-popover > a:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: -2px; }
+@media (pointer: coarse) { .file-tree .share-file-menu > summary, .share-file-menu .card-action-popover > a { min-block-size: 40px; } }
 .office-preview-body { margin: 0; overflow: hidden; block-size: 100dvh; }
 .office-preview-main { display: flex; flex-direction: column; block-size: 100%; min-block-size: 0; }
 #office-preview-status { padding: var(--space-2) var(--space-3); margin: 0; }

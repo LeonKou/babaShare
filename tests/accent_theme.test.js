@@ -539,8 +539,8 @@ test("真实登录与分享脚本执行换色，不向原型沙箱发送上下�
   }
 });
 
-async function sharePreview(mode = "native", page = "s/test") {
-  const app = realm({ page });
+async function sharePreview(mode = "native", page = "s/test", fixture = {}) {
+  const app = realm({ page, stored: fixture.stored });
   const shareRequests = [];
   const get = (id) => app.document.querySelector("#" + id);
   for (const id of ["share-shell", "share-sidebar", "share-controls", "share-layout", "preview-actions", "share-stage", "shared-frame", "share-state", "share-status", "share-tree", "share-title", "share-folder-title", "share-expiry", "share-current"]) {
@@ -577,9 +577,11 @@ async function sharePreview(mode = "native", page = "s/test") {
   app.context.API = async (name, options) => {
     assert.equal(name, "shareDetail");
     shareRequests.push(options);
+    if (fixture.listing) return { share: { expireTime: null }, previewBaseUrl: "/baba-share/preview/s/test/", listing: await fixture.listing(options.query) };
     return { share: { expireTime: null }, previewBaseUrl: "/baba-share/preview/s/test/", listing: { entries: [{ name: "index.html", path: "index.html", kind: "file" }, { name: "other.html", path: "other.html", kind: "file" }], pageIndex: 1, totalPage: 1, totalCount: 2, entryPath: "index.html" } };
   };
   allowSharePreviewFetch(app);
+  if (fixture.fetch) app.context.fetch = fixture.fetch;
   app.run("preview.js");
   await app.run("share.js");
   await flush();
@@ -600,6 +602,100 @@ async function sharePreview(mode = "native", page = "s/test") {
   app.resolveRequest = () => resolveRequest();
   return app;
 }
+
+test("分享所有文件的原生菜单保留下载授权与独立文件窗口，三语双主题可用", async () => {
+  for (const locale of locales) for (const theme of ["light", "dark"]) {
+    const app = await sharePreview("native", "s/test", { stored: JSON.stringify({ locale, theme }) });
+    for (const row of app.get("share-tree").children) {
+      const [file, menu] = row.children;
+      assert.equal(file.tag, "button");
+      assert.equal(menu.tag, "details");
+      const [summary, panel] = menu.children;
+      assert(summary.attrs["aria-label"].includes(file.dataset.path));
+      const [download, open] = panel.children;
+      assert.equal(download.tag, "a");
+      assert.equal(new URL(download.attrs.href).pathname, "/baba-share/preview/s/test/" + file.dataset.path);
+      assert.equal(new URL(download.attrs.href).searchParams.get("download"), "1");
+      assert.equal(download.attrs.download, file.dataset.path);
+      assert.equal(open.attrs.target, "_blank");
+      assert.equal(open.attrs.rel, "noopener noreferrer");
+      assert.equal(open.attrs.referrerpolicy, "no-referrer");
+      assert.equal(new URL(open.attrs.href).searchParams.get("file"), file.dataset.path);
+      assert.equal(new URL(open.attrs.href).searchParams.get("view"), "file");
+      assert.equal(open.textContent, app.context.I18n.t("shareOpenWindow"));
+    }
+    assert.equal(app.document.documentElement.dir, { "zh-CN": "ltr", "en-US": "ltr", "ar-SA": "rtl" }[locale]);
+    assert.equal(app.document.documentElement.dataset.mode, theme);
+  }
+});
+
+test("纯预览新窗口只打开指定文件且不请求浏览器原生全屏", async () => {
+  const app = await sharePreview("native", "s/test?file=other.html&view=file");
+  assert.equal(app.get("share-current").textContent, "other.html");
+  assert(app.get("share-shell").classList.contains("share-file-view"));
+  assert.equal(app.document.documentElement.dataset.shareView, "file");
+  assert.equal(app.get("share-sidebar").hidden, true);
+  assert.equal(app.currentFrame().attrs.sandbox, "allow-scripts");
+  assert.equal(app.currentFrame().attrs.referrerpolicy, "no-referrer");
+  assert.deepEqual(app.counts(), { requests: 0, exits: 0 });
+  const missing = await sharePreview("native", "s/test?view=file");
+  assert.equal(missing.currentFrame(), undefined);
+  assert.equal(missing.get("share-state").hidden, false);
+});
+
+test("默认文件遍历根目录分页及深层目录，缓存内每个文件仍有菜单", async () => {
+  const listing = ({ path, pageIndex }) => {
+    const entries = path === "" ? [{ name: pageIndex === 1 ? "empty" : "deep", path: pageIndex === 1 ? "empty" : "deep", kind: "folder" }]
+      : path === "deep" ? [{ name: "nested", path: "deep/nested", kind: "folder" }]
+      : path === "deep/nested" ? [{ name: "a.txt", path: "deep/nested/a.txt", kind: "file" }] : [];
+    return { entries, pageIndex, totalPage: path === "" ? 2 : 1, totalCount: entries.length, entryPath: null };
+  };
+  const app = await sharePreview("native", "s/test", { listing, fetch: async () => ({ ok: true, headers: { get: () => null }, arrayBuffer: async () => new TextEncoder().encode("deep file").buffer }) });
+  assert.equal(app.get("share-current").textContent, "deep/nested/a.txt");
+  assert.deepEqual(app.shareRequests.map((request) => [request.query.path, request.query.pageIndex]), [["", 1], ["", 2], ["empty", 1], ["deep", 1], ["deep/nested", 1]]);
+  const row = app.nodes.find((node) => node.className === "share-file-row" && node.children[0].dataset.path === "deep/nested/a.txt");
+  assert(row && app.get("share-tree").contains(row));
+  const trigger = row.children[1].children[0];
+  assert.equal(trigger.children[0].children[0].attrs.d, "M12 3v13m-5-5 5 5 5-5M4 16v5h16v-5");
+  assert.equal(trigger.attrs["aria-label"], app.context.I18n.t("previewDownload") + " / " + app.context.I18n.t("shareOpenWindow") + ": a.txt");
+  assert.equal(row.children[1].children[1].children.length, 2);
+  assert.equal(new URL(row.children[1].children[1].children[1].attrs.href).searchParams.get("file"), "deep/nested/a.txt");
+});
+
+test("根目录第二页的首个文件自动选中，普通展开的深层文件也有独立菜单", async () => {
+  const listing = ({ path, pageIndex }) => ({
+    entries: path === "folder" ? [{ name: "nested.html", path: "folder/nested.html", kind: "file" }]
+      : pageIndex === 1 ? [{ name: "folder", path: "folder", kind: "folder" }]
+      : [{ name: "other.html", path: "other.html", kind: "file" }],
+    pageIndex, totalPage: path === "" ? 2 : 1, totalCount: 2, entryPath: null,
+  });
+  const app = await sharePreview("native", "s/test", { listing });
+  assert.equal(app.get("share-current").textContent, "other.html");
+  assert.equal(app.shareRequests.length, 2);
+  const folder = app.get("share-tree").children[0].children[0];
+  folder.open = true;
+  await folder.fire("toggle");
+  const fileRow = folder.children[1].children[0];
+  assert.equal(fileRow.children[0].dataset.path, "folder/nested.html");
+  const [download, open] = fileRow.children[1].children[1].children;
+  assert.equal(new URL(download.attrs.href).pathname, "/baba-share/preview/s/test/folder/nested.html");
+  assert.equal(new URL(open.attrs.href).searchParams.get("file"), "folder/nested.html");
+  assert.equal(new URL(open.attrs.href).searchParams.get("view"), "file");
+  assert.equal(app.get("share-current").textContent, "other.html");
+});
+
+test("默认优先入口不依赖当前分页，显式文件编码一次且空分享不假造文件", async () => {
+  const home = await sharePreview("native", "s/test", { listing: () => ({ entries: [], pageIndex: 1, totalPage: 3, totalCount: 120, entryPath: "HOME.HTML" }), fetch: async () => ({ ok: true, headers: { get: () => null }, arrayBuffer: async () => new TextEncoder().encode("<p>home</p>").buffer }) });
+  assert.equal(home.get("share-current").textContent, "HOME.HTML");
+  assert.equal(home.shareRequests.length, 1);
+  const path = "目录/100% #+& %2e%2e.html";
+  const encoded = await sharePreview("native", "s/test?view=file&file=" + encodeURIComponent(path), { fetch: async () => ({ ok: true, headers: { get: () => null }, arrayBuffer: async () => new TextEncoder().encode("<p>encoded</p>").buffer }) });
+  assert.equal(new URL(encoded.currentFrame().src).pathname, "/baba-share/preview/s/test/" + path.split("/").map(encodeURIComponent).join("/"));
+  assert.equal(encoded.get("share-current").textContent, path);
+  const empty = await sharePreview("native", "s/test", { listing: () => ({ entries: [], pageIndex: 1, totalPage: 0, totalCount: 0, entryPath: null }) });
+  assert.equal(empty.currentFrame(), undefined);
+  assert.equal(empty.get("share-state").hidden, false);
+});
 
 test("分享仅从正式路径读取token，保留file定位并忽略查询token", async () => {
   const app = await sharePreview("native", "s/path-token?token=ignored&file=other.html");

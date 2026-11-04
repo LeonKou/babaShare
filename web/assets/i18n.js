@@ -1377,7 +1377,7 @@
   for (const [locale, messages] of Object.entries(directoryMessages)) Object.assign(dictionaries[locale], messages);
   const filePreviewMessages = {
     "zh-CN": {
-      previewDownload: "下载原文件", previewReadonly: "只读预览", previewCode: "源码预览",
+      shareOpenWindow: "在新窗口打开", previewDownload: "下载原文件", previewReadonly: "只读预览", previewCode: "源码预览",
       previewCodeKeyboard: "只读源码；Tab移出编辑器，Ctrl+F查找。", previewMarkdown: "Markdown预览",
       previewMarkdownHint: "安全阅读模式：不执行HTML，不加载外部图片或链接。",
       previewEncodingUnsupported: "此文件不是有效的UTF-8文本，请下载后查看。",
@@ -1392,7 +1392,7 @@
       PREVIEW_TOO_LARGE: "文件超过此类预览的安全大小限制，请下载查看。",
     },
     "en-US": {
-      previewDownload: "Download original", previewReadonly: "Read-only preview", previewCode: "Source preview",
+      shareOpenWindow: "Open in new window", previewDownload: "Download original", previewReadonly: "Read-only preview", previewCode: "Source preview",
       previewCodeKeyboard: "Read-only source. Tab leaves the editor; Ctrl+F searches.", previewMarkdown: "Markdown preview",
       previewMarkdownHint: "Safe reading: HTML is not executed; external images and links are not loaded.",
       previewEncodingUnsupported: "This is not valid UTF-8 text. Download to view it.",
@@ -1407,7 +1407,7 @@
       PREVIEW_TOO_LARGE: "This file exceeds the safe preview size limit. Download to view it.",
     },
     "ar-SA": {
-      previewDownload: "تنزيل الملف الأصلي", previewReadonly: "معاينة للقراءة فقط", previewCode: "معاينة الشفرة",
+      shareOpenWindow: "فتح في نافذة جديدة", previewDownload: "تنزيل الملف الأصلي", previewReadonly: "معاينة للقراءة فقط", previewCode: "معاينة الشفرة",
       previewCodeKeyboard: "الشفرة للقراءة فقط. ينقل Tab التركيز خارج المحرر؛ Ctrl+F للبحث.", previewMarkdown: "معاينة Markdown",
       previewMarkdownHint: "وضع قراءة آمن: لا يتم تنفيذ HTML أو تحميل الصور والروابط الخارجية.",
       previewEncodingUnsupported: "هذا الملف ليس نص UTF-8 صالحًا. نزّله لعرضه.",

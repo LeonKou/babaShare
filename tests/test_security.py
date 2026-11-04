@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from urllib.parse import urlencode, urljoin, urlsplit
+from urllib.parse import quote, urlencode, urljoin, urlsplit
 from unittest import mock
 
 from backend.config import Config
@@ -461,6 +461,38 @@ assert.equal(get('#shared-frame').src,undefined);
         self.assertEqual(headers["cache-control"], "no-store")
         self.ok("DELETE", "/share", "owner", query={"id": share["id"]})
         self.assertEqual(self.request("GET", prefix, query={"download": "1"}, preview=True)[0], 404)
+
+    def test_share_download_nested_encoding_scope_and_live_authorization(self):
+        share = self.make_share()
+        name = "目录/100% #+& %2e%2e.html"
+        self.file("site/" + name, content="<html>精确原文件</html>")
+        prefix = "/baba-share/preview/s/" + share["token"] + "/"
+        resource = prefix + quote(name, safe="/")
+        status, raw, headers = self.request("GET", resource, query={"download": "1"}, preview=True)
+        self.assertEqual(status, 200)
+        self.assertEqual(raw.decode(), "<html>精确原文件</html>")
+        self.assertEqual(headers["content-disposition"], "attachment; filename*=UTF-8''" + quote(name.split("/")[-1], safe=""))
+        self.assert_sandbox(headers)
+        self.assertEqual(headers["referrer-policy"], "no-referrer")
+        self.assertNotIn("set-cookie", headers)
+        for path in ("../private.txt", "%2e%2e/private.txt", "%252e%252e/private.txt", "%E7%9B%AE%E5%BD%95/%2e%2e/%2e%2e/private.txt", "%E7%9B%AE%E5%BD%95%5c..%5cprivate.txt"):
+            self.assertIn(self.request("GET", prefix + path, query={"download": "1"}, preview=True)[0], (400, 403, 404))
+        self.assertEqual(self.request("GET", "/workspace/list", query={"token": share["token"]})[0], 401)
+        self.app.service.repo.execute("UPDATE sys_user SET is_disabled=1 WHERE id=?", (db_id(self.users["owner"]["id"]),))
+        try:
+            self.assertEqual(self.request("GET", resource, query={"download": "1"}, preview=True)[0], 404)
+        finally:
+            self.app.service.repo.execute("UPDATE sys_user SET is_disabled=0 WHERE id=?", (db_id(self.users["owner"]["id"]),))
+        self.app.service.repo.execute("UPDATE folder_share SET expire_time=? WHERE id=?", (now_ms() - 1, db_id(share["id"])))
+        self.assertEqual(self.request("GET", resource, query={"download": "1"}, preview=True)[0], 404)
+
+    def test_share_download_revoked_when_membership_removed(self):
+        self.file("site/deep/file.html")
+        share = self.ok("POST", "/share", "peer", {"workspaceId": self.workspace, "path": "site"})
+        resource = "/baba-share/preview/s/" + share["token"] + "/deep/file.html"
+        self.assertEqual(self.request("GET", resource, query={"download": "1"}, preview=True)[0], 200)
+        self.ok("DELETE", "/member", "owner", query={"workspaceId": self.workspace, "userId": self.users["peer"]["id"]})
+        self.assertEqual(self.request("GET", resource, query={"download": "1"}, preview=True)[0], 404)
 
     def test_share_isolation_revocation_and_headers(self):
         share = self.make_share()

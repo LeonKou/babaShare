@@ -2,6 +2,7 @@
   "use strict";
   const { $, el, button, icon, toast, errorText } = UI;
   const token = decodeURIComponent(location.pathname.match(/^\/baba-share\/s\/([^/]+)$/)?.[1] || "");
+  const previewOnly = new URL(location.href).searchParams.has("view", "file");
   let share = null;
   let currentFile = "";
   let previewBase = null;
@@ -11,6 +12,8 @@
   const shell = $("#share-shell");
   const layout = $("#share-layout");
   const sidebar = $("#share-sidebar");
+  shell.classList.toggle("share-file-view", previewOnly);
+  sidebar.hidden = previewOnly;
   let immersive = false;
   let fullscreenPending = false;
   let normalTreeCollapsed = false;
@@ -160,31 +163,51 @@
     url.searchParams.set("file", entry.path);
     history.replaceState(null, "", url);
   }
-  async function loadDirectory(path, list, nextPage = 1) {
+  async function fetchDirectory(path, nextPage = 1) {
     const cache = directoryCache.get(path) || {
       entries: [],
       pageIndex: 0,
       totalPage: 1,
       totalCount: 0,
     };
+    const response = await API("shareDetail", {
+      query: { token, path, pageIndex: nextPage, pageSize: 50 },
+    });
+    const listing = response.listing;
+    cache.entries = nextPage === 1 ? listing.entries : cache.entries.concat(listing.entries);
+    cache.pageIndex = listing.pageIndex;
+    cache.totalPage = listing.totalPage;
+    cache.totalCount = listing.totalCount;
+    cache.entryPath = listing.entryPath;
+    directoryCache.set(path, cache);
+    return response;
+  }
+  async function defaultFile() {
+    const pending = [""];
+    for (let index = 0; index < pending.length; index++) {
+      const path = pending[index];
+      if (!directoryCache.has(path)) await fetchDirectory(path);
+      let cache = directoryCache.get(path);
+      if (cache.entryPath) return cache.entryPath;
+      for (;;) {
+        const first = cache.entries.find((entry) => entry.kind === "file");
+        if (first) return first.path;
+        if (cache.pageIndex >= cache.totalPage) break;
+        await fetchDirectory(path, cache.pageIndex + 1);
+        cache = directoryCache.get(path);
+      }
+      pending.push(...cache.entries.filter((entry) => entry.kind === "folder").map((entry) => entry.path));
+    }
+    return "";
+  }
+  async function loadDirectory(path, list, nextPage = 1) {
     const more = list.querySelector(":scope > .tree-more");
     if (more) more.remove();
     const loading = el("li", { class: "small muted", text: I18n.t("loading") });
     list.append(loading);
     list.setAttribute("aria-busy", "true");
     try {
-      const response = await API("shareDetail", {
-        query: { token, path, pageIndex: nextPage, pageSize: 50 },
-      });
-      const listing = response.listing;
-      cache.entries =
-        nextPage === 1
-          ? listing.entries
-          : cache.entries.concat(listing.entries);
-      cache.pageIndex = listing.pageIndex;
-      cache.totalPage = listing.totalPage;
-      cache.totalCount = listing.totalCount;
-      directoryCache.set(path, cache);
+      const response = await fetchDirectory(path, nextPage);
       renderDirectory(path, list);
       return response;
     } catch (error) {
@@ -211,7 +234,9 @@
         const details = el("details");
         const summary = el("summary", { text: entry.name });
         const children = el("ul");
-        let loaded = false;
+        let loaded = directoryCache.has(entry.path);
+        if (loaded) renderDirectory(entry.path, children);
+        if (currentFile.startsWith(entry.path + "/")) details.open = true;
         details.append(summary, children);
         details.addEventListener("toggle", async () => {
           if (!details.open || loaded) return;
@@ -238,7 +263,19 @@
         );
         if (currentFile === entry.path)
           item.setAttribute("aria-current", "page");
-        list.append(el("li", {}, item));
+        const url = new URL(location.pathname, location.origin);
+        url.searchParams.set("file", entry.path);
+        url.searchParams.set("view", "file");
+        const download = new URL(previewBase + entry.path.split("/").map(encodeURIComponent).join("/"), location.href);
+        download.searchParams.set("download", "1");
+        const menu = el("details", { class: "card-action-menu share-file-menu" },
+          el("summary", { "aria-label": I18n.t("previewDownload") + " / " + I18n.t("shareOpenWindow") + ": " + entry.name, title: I18n.t("previewDownload") + " / " + I18n.t("shareOpenWindow") }, icon("download")),
+          el("div", { class: "card-action-popover" },
+            el("a", { href: download.href, download: entry.name, referrerpolicy: "no-referrer", text: I18n.t("previewDownload") }),
+            el("a", { href: url.href, target: "_blank", rel: "noopener noreferrer", referrerpolicy: "no-referrer", text: I18n.t("shareOpenWindow") }),
+          ),
+        );
+        list.append(el("li", { class: "share-file-row" }, item, menu));
       }
     }
     if (cache.pageIndex < cache.totalPage) {
@@ -268,17 +305,17 @@
     $("#share-stage").setAttribute("aria-busy", "true");
     try {
       if (!token) throw new Error("INVALID_SHARE");
-      const response = await loadDirectory("", $("#share-tree"));
+      const response = await fetchDirectory("");
       if (request !== loadingSequence) return;
       share = response.share;
       previewBase = response.previewBaseUrl;
-      render();
-      const initial =
-        new URL(location.href).searchParams.get("file") ||
-        response.listing.entryPath;
+      const selected = new URL(location.href).searchParams.get("file");
+      const initial = selected || (previewOnly ? "" : await defaultFile());
+      if (request !== loadingSequence) return;
       if (initial)
         selectFile({ name: initial.split("/").pop(), path: initial });
       else state("shareEmpty", "selectFile");
+      render();
       $("#share-status").textContent = "";
     } catch (error) {
       if (request !== loadingSequence) return;

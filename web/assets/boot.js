@@ -1,5 +1,7 @@
 (() => {
   const root = document.documentElement;
+  if (new URL(location.href).searchParams.has("view", "file"))
+    root.dataset.shareView = "file";
   root.dataset.accent = "blue";
   try {
     const context = JSON.parse(

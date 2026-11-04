@@ -13,7 +13,6 @@
       .workspace-operation-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        grid-auto-rows: 1fr;
         gap: var(--space-2);
         inline-size: min(100%, 600px);
         margin-inline-start: auto;
@@ -51,7 +50,6 @@
         inline-size: 100%;
         min-inline-size: 0;
         min-block-size: 40px;
-        block-size: 100%;
         margin: 0;
       }
       .workspace-action-row > button,
@@ -70,7 +68,6 @@
       #file-search input { min-inline-size: 0; }
       @media (max-width: 420px) {
         .workspace-operation-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        .workspace-action-row { grid-auto-rows: 1fr; }
         .workspace-action-row > :first-child:nth-last-child(2) { grid-column: auto; }
         .workspace-action-row > :only-child { grid-column: 2; }
         #workspace-head-actions > :first-child:nth-last-child(3) { grid-column: 2; }

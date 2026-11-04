@@ -148,10 +148,16 @@ test("现存分享只依据有效期判断可复用，不依赖已移除的撤�
   assert.doesNotMatch(script, /revokedTime/);
 });
 
-test("工作区操作和文件操作共用三列等宽栅格，分页搜索独立且窄屏折行", () => {
-  assert.match(html, /\.workspace-operation-grid\s*\{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);[^}]*grid-auto-rows: 1fr;[^}]*gap: var\(--space-2\)/);
+test("工作区操作保留等宽列和末侧对齐，按内容定行高并维持触控尺寸", () => {
+  const operationGrid = html.match(/\.workspace-operation-grid\s*\{([^}]*)\}/)?.[1] || "";
+  assert.match(operationGrid, /grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(operationGrid, /gap: var\(--space-2\)/);
+  assert.doesNotMatch(operationGrid, /grid-auto-rows/);
   assert.match(html, /\.workspace-action-row\s*\{[^}]*grid-column: 1 \/ -1;[^}]*grid-template-columns: subgrid/);
-  assert.match(html, /\.workspace-action-row > \.upload-menu > summary\s*\{[^}]*min-block-size: 40px;[^}]*block-size: 100%/);
+  const controls = html.match(/\.workspace-action-row > button,[\s\S]*?\{([^}]*)\}/)?.[1] || "";
+  assert.match(controls, /min-block-size: 40px/);
+  assert.doesNotMatch(controls, /block-size: 100%/);
+  assert.doesNotMatch(html, /\.workspace-action-row\s*\{[^}]*grid-auto-rows/);
   assert.match(html, /@media \(max-width: 420px\)[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
   assert.match(html, /white-space: normal;\s*overflow-wrap: anywhere/);
   const group = html.slice(html.indexOf('<div class="workspace-operation-grid"'), html.indexOf('<section id="workspace-picker"'));
