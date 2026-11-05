@@ -253,7 +253,7 @@
     controller?.abort();
     controller = new AbortController();
     const current = ++requestId;
-    $("#user-status").textContent = I18n.t("loading");
+    UI.loading($("#user-status"));
     $("#user-status").classList.remove("error");
     $("#user-cards").setAttribute("aria-busy", "true");
     pager.busy(true);
@@ -270,7 +270,9 @@
       restoreFocus?.();
       $("#user-status").textContent = "";
     } catch (e) {
-      if (e.name === "AbortError") return;
+      if (e.name === "AbortError" || current !== requestId) return;
+      bridge.fail(e);
+      $("#user-empty").hidden = true;
       $("#user-status").classList.add("error");
       $("#user-status").textContent = errorText(e);
       $("#user-status").append(button("retry", load));
@@ -290,4 +292,5 @@
   I18n.subscribe(render);
   await bridge.ready;
   await load();
+  await bridge.complete();
 })();

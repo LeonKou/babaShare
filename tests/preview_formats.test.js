@@ -5,9 +5,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const source = fs.readFileSync(path.join(__dirname, "../web/assets/preview.js"), "utf8");
-function environment(fetcher = async () => response("sample")) {
-  const events = new Map(), revoked = [], sent = [], nodes = [], animationFrames = new Map();
-  let nextFrame = 0, reducedMotion = false;
+function environment(fetcher = async () => response("sample"), { fakeTimers = false } = {}) {
+  const events = new Map(), revoked = [], sent = [], nodes = [], animationFrames = new Map(), timers = new Map();
+  let nextFrame = 0, nextTimer = 0, reducedMotion = false;
   class Element {
     constructor(tag, attrs = {}) {
       this.tag = tag; this.attrs = { ...attrs }; this.children = []; this.dataset = {}; this.textContent = attrs.text || ""; this.events = new Map(); this.hidden = false; this.src = attrs.src || "";
@@ -33,7 +33,9 @@ function environment(fetcher = async () => response("sample")) {
   }
   class TestURL extends URL { static createObjectURL() { return "blob:http://localhost/fixed"; } static revokeObjectURL(value) { revoked.push(value); } }
   const context = {
-    console, URL: TestURL, AbortController, TextDecoder, Uint8Array, Blob, setTimeout, clearTimeout,
+    console, URL: TestURL, AbortController, TextDecoder, Uint8Array, Blob,
+    setTimeout: fakeTimers ? (fn, delay) => { timers.set(++nextTimer, { fn, delay }); return nextTimer; } : setTimeout,
+    clearTimeout: fakeTimers ? (id) => timers.delete(id) : clearTimeout,
     location: new URL("http://localhost/baba-share/workspace.html"), fetch: fetcher,
     UI: {
       el: (tag, attrs, ...items) => { const node = new Element(tag, attrs); node.append(...items); return node; },
@@ -57,7 +59,7 @@ function environment(fetcher = async () => response("sample")) {
   context.window = context;
   vm.runInNewContext(source, context);
   return {
-    ...context.FilePreview, context, Element, nodes, revoked, sent, events, animationFrames,
+    ...context.FilePreview, context, Element, nodes, revoked, sent, events, animationFrames, timers,
     reduceMotion: () => { reducedMotion = true; },
     renderFrame: () => { const pending = [...animationFrames.values()]; animationFrames.clear(); pending.forEach((callback) => callback()); },
   };
@@ -348,6 +350,48 @@ test("预览读取或渲染失败不回执，回执网络错误保留显式重�
   const failed = broken.create(new broken.Element("host"));
   await failed.load({ name: "sample.txt", url, onboardingTicket: "memory-only" }); failed.dispose();
 });
+test("空状态和成功回执不占位，回执失败可见并可重试清理翻译标记", async () => {
+  const app = environment(), view = app.create(new app.Element("host"));
+  const statuses = app.nodes.filter((node) => node.classList.contains("status-line"));
+  assert.equal(statuses.length, 2);
+  assert(statuses.every((node) => node.hidden && node.textContent === ""));
+  let attempts = 0;
+  app.context.API = async () => { if (++attempts === 1) throw new Error("offline"); return {}; };
+  await view.load({ name: "sample.txt", url, onboardingTicket: "memory" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(statuses[0].hidden, true);
+  assert.equal(statuses[0].attrs["data-i18n"], undefined);
+  assert.equal(statuses[1].hidden, false);
+  assert.equal(statuses[1].textContent, "onboardingReceiptFailed");
+  assert.equal(statuses[1].attrs["data-i18n"], "onboardingReceiptFailed");
+  await app.nodes.find((node) => node.textContent === "onboardingRetry").action();
+  assert.equal(attempts, 2);
+  assert(statuses.every((node) => node.hidden && node.textContent === ""));
+  assert.equal(statuses[1].attrs["data-i18n"], undefined);
+  await view.load({ name: "next.txt", url });
+  assert(statuses.every((node) => node.hidden && node.textContent === ""));
+  view.dispose();
+  const css = fs.readFileSync(path.join(__dirname, "../web/assets/preview.css"), "utf8");
+  assert.match(css, /\.file-preview > \.status-line:empty\s*\{\s*display: none;/);
+});
+test("可见预览错误及重试在成功后完全退场，不残留加载或空行", async () => {
+  let attempts = 0;
+  const app = environment(async () => ++attempts === 1 ? { ok: false, status: 404 } : response("ready"));
+  const states = [], view = app.create(new app.Element("host"), { externalLoading: true, retry: true, onState: (state) => states.push(state) });
+  await view.load({ name: "sample.txt", url });
+  const statuses = app.nodes.filter((node) => node.classList.contains("status-line"));
+  assert.equal(statuses[0].hidden, false);
+  assert.equal(statuses[0].textContent, "FILE_NOT_EXIST");
+  assert.equal(statuses[1].hidden, true);
+  const retry = app.nodes.find((node) => node.classList.contains("file-preview-retry"));
+  await retry.action();
+  assert.deepEqual(states, ["loading", "error", "loading", "ready"]);
+  assert(statuses.every((node) => node.hidden && node.textContent === ""));
+  assert.equal(statuses[0].attrs["data-i18n"], undefined);
+  assert.equal(retry.removed, true);
+  assert.equal(view.root.attrs["aria-busy"], "false");
+  view.dispose();
+});
 test("HTML必须主HTTP成功再创建iframe，读取失败与迟到load不回执", async () => {
   for (const ok of [true, false]) {
     let reads = 0, calls = 0;
@@ -385,8 +429,123 @@ test("可信渲染失败后迟到ready不再交付bytes或text，元数据不算
   await view.load({ name: "report.docx", url, onboardingTicket: "memory" });
   const frame = app.nodes.find((node) => node.tag === "iframe"), handler = app.events.get("message");
   for (const type of ["preview-office.error", "preview-office.ready", "preview-office.loaded"]) handler({ origin: "http://localhost", source: frame.contentWindow, data: { version: 1, type } });
-  assert.equal(app.sent.length, 0); view.dispose();
+  assert.equal(app.sent.filter((message) => message[0].type === "preview-office.load").length, 0);
+  assert.equal(app.sent[0][0].type, "preview-office.dispose"); view.dispose();
   assert.doesNotMatch(source, /addEventListener\("loadedmetadata", complete\)/);
+});
+test("外部插画加载只在真实渲染完成后结束，旧文件事件不能结束新加载", async () => {
+  const app = environment(), states = [];
+  const view = app.create(new app.Element("host"), { externalLoading: true, retry: true, onState: (state) => states.push(state) });
+  await view.load({ name: "first.png", url });
+  const image = app.nodes.find((node) => node.tag === "img");
+  const body = app.nodes.find((node) => node.classList.contains("file-preview-body"));
+  assert.deepEqual(states, ["loading"]);
+  assert.equal(body.classList.contains("file-preview-pending"), true);
+  assert.equal(app.nodes.find((node) => node.classList.contains("status-line")).hidden, true);
+  await view.load({ name: "next.js", url });
+  image.events.get("load")();
+  assert.deepEqual(states, ["loading", "loading"]);
+  const frame = app.nodes.find((node) => node.tag === "iframe"), handler = app.events.get("message");
+  const send = (type) => handler({ origin: "http://localhost", source: frame.contentWindow, data: { version: 1, type: "preview-code." + type } });
+  frame.events.get("load")?.(); send("loaded");
+  assert.equal(body.classList.contains("file-preview-pending"), true);
+  send("ready"); assert.deepEqual(states, ["loading", "loading"]);
+  send("loaded"); send("loaded");
+  assert.deepEqual(states, ["loading", "loading", "ready"]);
+  assert.equal(body.classList.contains("file-preview-pending"), false);
+  view.dispose();
+});
+test("读取及渲染超时均终止插画、释放资源、可重试且拒绝迟到完成", async () => {
+  for (const name of ["index.html", "photo.png", "clip.mp4", "report.pdf", "code.js", "report.docx"]) {
+    const app = environment(undefined, { fakeTimers: true }), states = [];
+    const view = app.create(new app.Element("host"), { externalLoading: true, retry: true, onState: (state) => states.push(state) });
+    await view.load({ name, url });
+    const rendered = app.nodes.find((node) => ["iframe", "img", "video"].includes(node.tag));
+    assert.equal(app.timers.size, 1);
+    assert.equal([...app.timers.values()][0].delay, name.endsWith("docx") ? 120000 : 30000);
+    [...app.timers.values()][0].fn();
+    assert.deepEqual(states, ["loading", "error"]);
+    assert.equal(app.timers.size, 0);
+    assert.equal(view.root.attrs["aria-busy"], "false");
+    if (rendered.tag === "iframe") assert.equal(rendered.src, "about:blank");
+    for (const type of ["load", "loadeddata", "canplay"]) rendered.events.get(type)?.();
+    assert.deepEqual(states, ["loading", "error"]);
+    const retry = app.nodes.find((node) => node.classList.contains("file-preview-retry"));
+    await retry.action();
+    assert.deepEqual(states, ["loading", "error", "loading"]);
+    view.dispose(); assert.equal(app.timers.size, 0);
+  }
+  let finish, signal;
+  const app = environment((_, options) => { signal = options.signal; return new Promise((resolve) => { finish = resolve; }); }, { fakeTimers: true }), states = [];
+  const view = app.create(new app.Element("host"), { onState: (state) => states.push(state), retry: true });
+  const pending = view.load({ name: "slow.md", url });
+  [...app.timers.values()][0].fn();
+  assert.equal(signal.aborted, true); assert.deepEqual(states, ["loading", "error"]);
+  finish(response("late markdown")); await pending;
+  assert.equal(app.nodes.some((node) => node.tag === "article"), false);
+  view.dispose();
+});
+test("Markdown与不支持格式同步结束外部加载，PDF仅结束展示而不回执", async () => {
+  const app = environment(), states = [], view = app.create(new app.Element("host"), { externalLoading: true, onState: (state) => states.push(state) });
+  app.context.API = async () => assert.fail("PDF没有可信回执");
+  await view.load({ name: "DEPLOYMENT.md", url });
+  assert.deepEqual(states, ["loading", "ready"]);
+  await view.load({ name: "archive.zip", url });
+  assert.deepEqual(states, ["loading", "ready", "loading", "error"]);
+  await view.load({ name: "report.pdf", url, onboardingTicket: "memory" });
+  assert.equal(states.at(-1), "loading");
+  app.nodes.find((node) => node.tag === "iframe").events.get("load")();
+  assert.equal(states.at(-1), "ready");
+  view.dispose();
+});
+function shareEnvironment({ fileMode = false, metadataPending = false } = {}) {
+  let finish, metadataResolve;
+  const app = environment(() => new Promise((resolve) => { finish = resolve; }), { fakeTimers: true });
+  const ids = new Map();
+  for (const id of ["share-shell", "share-layout", "share-sidebar", "share-controls", "preview-actions", "share-stage", "share-preview-area", "share-loading", "share-status", "shared-frame", "share-state", "share-current", "share-tree", "share-title", "share-folder-title", "share-expiry", "share-navigation", "share-file-type"])
+    ids.set(id, new app.Element("div"));
+  for (const node of ids.values()) {
+    node.classList.toggle = (name, force) => { const value = force ?? !node.classList.contains(name); if (value) node.classList.add(name); else node.classList.remove(name); return value; };
+    node.prepend = (...items) => node.children.unshift(...items);
+    node.contains = () => false;
+    node.querySelectorAll = () => [];
+  }
+  Object.assign(app.context.UI, { $: (selector) => ids.get(selector.slice(1)), settingsControls() {}, icon: () => new app.Element("svg"), date: () => "date", errorText: () => "error" });
+  Object.assign(app.context.I18n, { apply() {} });
+  app.context.location = new URL("http://localhost/baba-share/s/token" + (fileMode ? "?view=file&file=DEPLOYMENT.md" : ""));
+  app.context.history = { replaceState() {} };
+  app.context.document = { querySelectorAll: () => [], addEventListener() {}, activeElement: null, title: "" };
+  const listing = { share: { expireTime: 1 }, previewBaseUrl: "/baba-share/preview/s/token/", listing: { entries: [{ name: "DEPLOYMENT.md", path: "DEPLOYMENT.md", kind: "file" }], pageIndex: 1, totalPage: 1, totalCount: 1 } };
+  app.context.API = () => metadataPending ? new Promise((resolve) => { metadataResolve = resolve; }) : Promise.resolve(listing);
+  const started = vm.runInContext(fs.readFileSync(path.join(__dirname, "../web/assets/share.js"), "utf8"), app.context);
+  return { app, ids, started, resolveFile: (text) => finish(response(text)), resolveMetadata: () => metadataResolve(listing) };
+}
+test("分享正常及沉浸单文件模式持续显示插画至选中文件完成，无双重加载文本", async () => {
+  for (const fileMode of [false, true]) {
+    const { app, ids, started, resolveFile } = shareEnvironment({ fileMode });
+    await started;
+    assert.equal(ids.get("share-loading").hidden, false);
+    assert.equal(ids.get("share-preview-area").attrs["aria-busy"], "true");
+    assert.equal(ids.get("share-status").textContent, "loading");
+    const status = app.nodes.find((node) => node.classList.contains("status-line"));
+    assert.equal(status.hidden, true); assert.equal(status.textContent, "");
+    assert.equal(ids.get("share-shell").classList.contains("share-file-view"), fileMode);
+    resolveFile("# deployment"); await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(ids.get("share-loading").hidden, true);
+    assert.equal(ids.get("share-preview-area").attrs["aria-busy"], "false");
+    assert.equal(ids.get("share-status").textContent, "pageReady");
+    app.events.get("pagehide")();
+  }
+});
+test("分享目录超时停止插画并提供重试，迟到元数据不启动文件预览", async () => {
+  const { app, ids, started, resolveMetadata } = shareEnvironment({ metadataPending: true });
+  assert.equal(ids.get("share-loading").hidden, false);
+  [...app.timers.values()][0].fn();
+  assert.equal(ids.get("share-loading").hidden, true);
+  assert.equal(ids.get("share-preview-area").attrs["aria-busy"], "false");
+  assert(ids.get("share-state").children.some((node) => node.tag === "button"));
+  resolveMetadata(); await started;
+  assert.equal(app.nodes.some((node) => node.classList.contains("file-preview")), false);
 });
 test("固定Monaco版本本地部署且保留许可，无Node运行依赖", () => {
   const root = path.join(__dirname, "../web"), code = fs.readFileSync(path.join(root, "assets/preview-code.js"), "utf8");

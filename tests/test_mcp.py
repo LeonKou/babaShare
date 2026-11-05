@@ -278,7 +278,7 @@ const location=new URL(input.origin+'/baba-share/account.html');
 const context={console,URL,AbortController,crypto:require('crypto').webcrypto,queueMicrotask,Date,Uint8Array,
   location,history:{replaceState(){}},navigator:{clipboard:{writeText:async text=>{if(fallback)throw Error('blocked');copied.push(text);}}},
   document:{documentElement:{lang:'zh-CN',dir:'ltr',dataset:{mode:'dark'}},querySelectorAll(){return[];}},
-  UI:{$,el,button,copyButton:button,quotaSummary:()=>el('div'),toast:t=>notices.push(t),errorText:e=>e.status||'error',date:String,empty:()=>el('div'),page:()=>({ready:Promise.resolve()}),
+  UI:{$,el,button,copyButton:button,quotaSummary:()=>el('div'),toast:t=>notices.push(t),errorText:e=>e.status||'error',date:String,empty:()=>el('div'),loading:(node,key='loading')=>{node.textContent=key;},page:()=>({ready:Promise.resolve(),complete:async()=>{},fail(){}}),
     confirm:async()=>deleteConfirmed,
     api:async(path,options={})=>{const url=new URL(path,input.origin);for(const [name,value]of Object.entries(options.query||{}))url.searchParams.set(name,value);const response=await fetch(url,{method:options.method||'GET',headers:{Cookie:input.cookie,Origin:input.origin,'Content-Type':'application/json'},body:options.body?JSON.stringify(options.body):undefined});const data=await response.json();if(!response.ok)throw data;return data;},
     dialog:(title,build)=>{const node=el('dialog');let resolve;const result=new Promise(r=>resolve=r);const close=()=>{node.events.close?.();resolve(null);};dialogs.push({node,close,title});build(node,close);return{result,close};}},

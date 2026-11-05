@@ -17,8 +17,10 @@
       value.completedCount !== value.tasks.filter((task) => task.completed).length ||
       value.allComplete !== (value.completedCount === keys.length)) throw new Error("INVALID_RESPONSE");
     detail = value;
+    if (!page.embedded) window.OnboardingFeedback?.refresh();
   }
   function failure(error) {
+    page.fail(error);
     status.textContent = UI.errorText(error);
     status.classList.add("error");
     retry.replaceChildren(button("onboardingRetry", refresh));
@@ -27,7 +29,7 @@
     if (disposed || me?.role === "admin" || preferenceBusy) return;
     if (pending) return pending;
     const currentRevision = revision;
-    status.textContent = I18n.t("loading"); content.setAttribute("aria-busy", "true");
+    UI.loading(status); content.setAttribute("aria-busy", "true");
     pending = (async () => {
       try {
         if (!me) me = await API("me");
@@ -35,7 +37,7 @@
         const [value, spaces] = await Promise.all([API("onboarding"), API("workspaces")]);
         if (disposed || currentRevision !== revision) return;
         accept(value); workspaces = spaces;
-        status.textContent = ""; status.classList.remove("error"); retry.replaceChildren(); render();
+        status.textContent = ""; status.classList.remove("error"); retry.replaceChildren(); render(); notify();
       } catch (error) { if (!disposed) failure(error); }
       finally { pending = null; content.setAttribute("aria-busy", "false"); }
     })();
@@ -138,6 +140,8 @@
   try {
     me = await API("me");
     if (me.role === "admin") { status.textContent = I18n.t("onboardingUnavailable"); return; }
+    await window.OnboardingFeedback?.connect(page, me);
     await refresh();
   } catch (error) { failure(error); }
+  finally { await page.complete(); }
 })();

@@ -1,6 +1,7 @@
 (() => {
   "use strict";
-  function endpoint(target, accept, onClose) {
+  function endpoint(target, accept, onClose, session = "") {
+    const sender = Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString(16)).join("-");
     const listeners = new Map();
     const handlers = new Map();
     const pending = new Map();
@@ -11,17 +12,27 @@
       error.status = reason;
       return error;
     }
+    function cancelPending() {
+      pending.forEach((promise) => {
+        clearTimeout(promise.timer);
+        promise.reject(settleError("BRIDGE_CLOSED"));
+      });
+      pending.clear();
+    }
     function send(message) {
       if (closed) throw settleError("BRIDGE_CLOSED");
       const receiver = target();
       if (!receiver) throw settleError("BRIDGE_CLOSED");
       receiver.postMessage(
-        { babaShare: true, version: 1, ...message },
+        { babaShare: true, version: 1, session, sender, ...message },
         location.origin === "null" ? "*" : location.origin,
       );
     }
     async function receive(event) {
       if (
+        closed ||
+        event.data?.session !== session ||
+        (event.data.recipient && event.data.recipient !== sender) ||
         event.origin !== location.origin ||
         event.source !== target() ||
         !event.data?.babaShare ||
@@ -47,7 +58,7 @@
           response = {
             type: message.type,
             replyTo: message.requestId,
-            payload: await handler(message.payload),
+            payload: await handler(message.payload, message),
           };
         } catch (error) {
           response = {
@@ -57,34 +68,38 @@
           };
         }
         try {
-          send(response);
+          send({ ...response, recipient: message.sender });
         } catch (error) {
           console.error("Bridge response failed", error);
         }
         return;
       }
       for (const handler of listeners.get(message.type) || []) {
-        Promise.resolve()
-          .then(() => handler(message.payload))
-          .catch((error) => console.error("Bridge callback error", error));
+        try {
+          Promise.resolve(handler(message.payload, message))
+            .catch((error) => console.error("Bridge callback error", error));
+        } catch (error) {
+          console.error("Bridge callback error", error);
+        }
       }
     }
     window.addEventListener("message", receive);
     return {
-      emit(type, payload) {
-        send({ type, payload });
+      emit(type, payload, recipient) {
+        send({ type, payload, recipient });
       },
-      request(type, payload, timeout = 3000) {
+      cancelPending,
+      request(type, payload, timeout = 3000, recipient) {
         if (closed) return Promise.reject(settleError("BRIDGE_CLOSED"));
         return new Promise((resolve, reject) => {
-          const requestId = `${Date.now()}-${++sequence}`;
+          const requestId = `${sender}-${++sequence}`;
           const timer = setTimeout(() => {
             pending.delete(requestId);
             reject(settleError("BRIDGE_TIMEOUT"));
           }, timeout);
           pending.set(requestId, { resolve, reject, timer });
           try {
-            send({ type, payload, requestId });
+            send({ type, payload, requestId, recipient });
           } catch (error) {
             clearTimeout(timer);
             pending.delete(requestId);
@@ -106,11 +121,7 @@
         if (closed) return;
         closed = true;
         window.removeEventListener("message", receive);
-        pending.forEach((promise) => {
-          clearTimeout(promise.timer);
-          promise.reject(settleError("BRIDGE_CLOSED"));
-        });
-        pending.clear();
+        cancelPending();
         listeners.clear();
         handlers.clear();
         onClose?.();

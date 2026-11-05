@@ -93,7 +93,7 @@
     controller?.abort();
     controller = new AbortController();
     const current = ++requestId;
-    $("#admin-status").textContent = I18n.t("loading");
+    UI.loading($("#admin-status"));
     $("#admin-status").classList.remove("error");
     $("#admin-cards").setAttribute("aria-busy", "true");
     form.querySelector('button[type="submit"]').disabled = true;
@@ -109,6 +109,7 @@
       $("#admin-status").textContent = "";
     } catch (e) {
       if (current !== requestId || e.name === "AbortError") return;
+      bridge.fail(e);
       $("#admin-empty").hidden = true;
       $("#admin-status").classList.add("error");
       $("#admin-status").textContent = errorText(e);
@@ -166,5 +167,6 @@
     form.hidden = true;
     $("#admin-status").textContent = errorText(e);
     $("#admin-status").classList.add("error");
-  }
+    bridge.fail(e);
+  } finally { await bridge.complete(); }
 })();

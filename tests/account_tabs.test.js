@@ -68,9 +68,9 @@ async function account(query = "", failure = false, role = "editor", keyItems = 
       if (!events.has(name)) events.set(name, []);
       events.get(name).push(action);
     },
-    UI: {
+    UI: { loading: (node, key = "loading") => { node.textContent = key; },
       $, el, quotaSummary: () => null, toast() {}, errorText: (error) => error.message, date: String,
-      empty: () => el("p", {}), page: () => ({ ready: Promise.resolve(), request: (...args) => navigations.push(args) }),
+      empty: () => el("p", {}), page: () => ({ ready: Promise.resolve(), complete: async () => {}, fail() {}, request: (...args) => navigations.push(args) }),
       button(key, action) { const node = el("button", { text: key }); node.addEventListener("click", action); return node; },
       copyButton(key, action) { const node = el("button", { text: key }); node.addEventListener("click", action); return node; },
     },

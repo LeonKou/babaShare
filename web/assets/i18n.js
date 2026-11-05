@@ -4,6 +4,7 @@
     "zh-CN": {
       ONBOARDING_INCOMPLETE: "请先完成全部新手任务。", ONBOARDING_VISIT_REQUIRED: "请先成功打开工作区，再重试。", PREVIEW_NOT_READY: "预览尚未成功完成，请重新打开文件后重试。", onboardingVisitFailed: "工作区已打开，但任务进度未同步。刷新文件列表可重试。",
       onboarding: "新手任务", onboardingIntro: "六个小步骤，让你的第一个作品启航。", onboardingProgress: "{count} / {total}", onboardingCollapse: "收起任务", onboardingExpand: "展开任务", onboardingRetry: "重试", onboardingRefresh: "刷新进度", onboardingDone: "已完成", onboardingGo: "去完成", onboardingUnlocked: "启航纪念已解锁", onboardingUnlockHint: "按你的节奏继续。准备好时，打开属于你的启航纪念。", onboardingLaunch: "让作品启航", onboardingReplay: "重看启航纪念", onboardingSkip: "跳至纪念画面", onboardingStageTitle: "作品启航", onboardingUnavailable: "此账户无需新手任务。", onboardingOwnSpace: "你可以新建自己的工作区来完成创作任务；不会改变已有空间的只读权限。", onboardingPreviewHint: "点击文件名打开预览；没有文件时，可先在自己的空间上传文件。", onboardingReceiptFailed: "预览已打开，但任务进度未同步。请重试。", onboardingSaveFailed: "纪念画面已呈现，但记录保存失败。请重试。",
+      onboardingTaskCongratulations: "恭喜完成：{task}！", onboardingTasksCongratulations: "恭喜完成 {count} 项新手任务！",
       onboarding_enter_workspace: "进入工作区", onboarding_create_folder: "创建一个文件夹", onboarding_upload_file: "上传一个文件", onboarding_preview_file: "成功预览一个文件", onboarding_create_mcp_key: "创建一个 MCP Key", onboarding_mcp_tool_call: "通过 MCP 成功调用一次工具",
       onboardingHint_enter_workspace: "进入你有访问权限的空间，开始探索。", onboardingHint_create_folder: "在可编辑空间整理你的第一个目录。", onboardingHint_upload_file: "使用上传菜单或拖放，将自己的作品上传到可编辑空间。", onboardingHint_preview_file: "打开 HTML、图片、文本、代码或 Office 文件，等待内容成功呈现（原生 PDF 查看器不计入任务）。", onboardingHint_create_mcp_key: "进入个人中心的 MCP Key 页签，创建一个密钥。", onboardingHint_mcp_tool_call: "在个人中心的 MCP Key 页签复制使用说明，配置 MCP 客户端，并成功调用一次工具；仅连接或查看工具列表不计入。",
       onboardingStage_eyebrow: "一段新的开始", onboardingStage_title: "让作品，启航。", onboardingStage_message: "那些只存在于你脑海里的东西，现在有了被世界看见的入口。", onboardingStage_dedication: "这幅启航纪念，属于", onboardingStage_creator: "创作者", onboardingStage_brand: "babaShare", onboardingStage_sceneDescription: "两位伙伴把作品折成纸飞机，飞过六颗由成就点亮的星星。", onboardingStage_completed: "作品已启航。你的纪念画面已呈现。", onboardingStage_achievement1: "进入工作区", onboardingStage_achievement2: "创建文件夹", onboardingStage_achievement3: "上传文件", onboardingStage_achievement4: "成功预览文件", onboardingStage_achievement5: "创建 MCP Key", onboardingStage_achievement6: "成功调用 MCP 工具"
@@ -11,6 +12,7 @@
     "en-US": {
       ONBOARDING_INCOMPLETE: "Complete all getting-started tasks first.", ONBOARDING_VISIT_REQUIRED: "Open a workspace successfully, then retry.", PREVIEW_NOT_READY: "The preview has not completed successfully. Reopen the file and retry.", onboardingVisitFailed: "The workspace opened, but task progress could not sync. Refresh the file list to retry.",
       onboarding: "Getting started", onboardingIntro: "Six small steps to launch your first creation.", onboardingProgress: "{count} / {total}", onboardingCollapse: "Collapse tasks", onboardingExpand: "Show tasks", onboardingRetry: "Retry", onboardingRefresh: "Refresh progress", onboardingDone: "Completed", onboardingGo: "Get started", onboardingUnlocked: "Your launch keepsake is unlocked", onboardingUnlockHint: "Keep working at your own pace. Open your keepsake when you are ready.", onboardingLaunch: "Launch your creation", onboardingReplay: "Replay your launch", onboardingSkip: "Skip to keepsake", onboardingStageTitle: "Your creation takes flight", onboardingUnavailable: "Getting-started tasks are not available for this account.", onboardingOwnSpace: "Create your own workspace for writing tasks. Existing read-only permissions will not change.", onboardingPreviewHint: "Select a file name to preview it. If there are no files, upload one in your own workspace.", onboardingReceiptFailed: "The preview opened, but task progress could not sync. Please retry.", onboardingSaveFailed: "Your keepsake is ready, but its record could not be saved. Please retry.",
+      onboardingTaskCongratulations: "Congratulations! Completed: {task}.", onboardingTasksCongratulations: "Congratulations on completing {count} getting-started tasks!",
       onboarding_enter_workspace: "Enter a workspace", onboarding_create_folder: "Create a folder", onboarding_upload_file: "Upload a file", onboarding_preview_file: "Successfully preview a file", onboarding_create_mcp_key: "Create an MCP Key", onboarding_mcp_tool_call: "Successfully call an MCP tool",
       onboardingHint_enter_workspace: "Open a workspace you can access and start exploring.", onboardingHint_create_folder: "Organize your first folder in a writable workspace.", onboardingHint_upload_file: "Use the upload menu or drag and drop your work into a writable workspace.", onboardingHint_preview_file: "Open HTML, an image, text, code or an Office file and wait for it to render. Native PDF previews do not count.", onboardingHint_create_mcp_key: "Open the MCP Key tab in your account and create a key.", onboardingHint_mcp_tool_call: "Copy the usage guide from your account's MCP Key tab, configure an MCP client and successfully call a tool. Connecting or listing tools alone does not count.",
       onboardingStage_eyebrow: "A new beginning", onboardingStage_title: "Let your creation take flight.", onboardingStage_message: "The things that existed only in your mind now have a doorway to be seen by the world.", onboardingStage_dedication: "This launch keepsake belongs to", onboardingStage_creator: "Creator", onboardingStage_brand: "babaShare", onboardingStage_sceneDescription: "Two companions fold a creation into a paper plane that flies past six achievement stars.", onboardingStage_completed: "Your creation has taken flight. Your keepsake is ready.", onboardingStage_achievement1: "Entered a workspace", onboardingStage_achievement2: "Created a folder", onboardingStage_achievement3: "Uploaded a file", onboardingStage_achievement4: "Previewed a file", onboardingStage_achievement5: "Created an MCP Key", onboardingStage_achievement6: "Successfully called an MCP tool"
@@ -18,6 +20,7 @@
     "ar-SA": {
       ONBOARDING_INCOMPLETE: "أكمل جميع مهام البداية أولًا.", ONBOARDING_VISIT_REQUIRED: "افتح مساحة العمل بنجاح ثم أعد المحاولة.", PREVIEW_NOT_READY: "لم تكتمل المعاينة بنجاح. أعد فتح الملف وحاول مجددًا.", onboardingVisitFailed: "فُتحت مساحة العمل لكن تعذرت مزامنة التقدم. حدّث قائمة الملفات لإعادة المحاولة.",
       onboarding: "مهام البداية", onboardingIntro: "ست خطوات صغيرة لإطلاق عملك الأول.", onboardingProgress: "{count} / {total}", onboardingCollapse: "طي المهام", onboardingExpand: "عرض المهام", onboardingRetry: "إعادة المحاولة", onboardingRefresh: "تحديث التقدم", onboardingDone: "مكتملة", onboardingGo: "ابدأ المهمة", onboardingUnlocked: "تذكار الانطلاق متاح", onboardingUnlockHint: "تابع بالوتيرة التي تناسبك وافتح تذكارك عندما تكون مستعدًا.", onboardingLaunch: "أطلق عملك", onboardingReplay: "إعادة عرض الانطلاق", onboardingSkip: "الانتقال إلى التذكار", onboardingStageTitle: "انطلاق عملك", onboardingUnavailable: "مهام البداية غير متاحة لهذا الحساب.", onboardingOwnSpace: "أنشئ مساحة عمل خاصة بك لمهام الكتابة. لن تتغير صلاحيات القراءة فقط في المساحات الحالية.", onboardingPreviewHint: "اختر اسم ملف لمعاينته. إذا لم توجد ملفات، ارفع ملفًا في مساحتك الخاصة.", onboardingReceiptFailed: "فُتحت المعاينة لكن تعذرت مزامنة تقدم المهمة. أعد المحاولة.", onboardingSaveFailed: "ظهر تذكارك لكن تعذر حفظ السجل. أعد المحاولة.",
+      onboardingTaskCongratulations: "تهانينا! أكملت: {task}.", onboardingTasksCongratulations: "تهانينا على إكمال {count} من مهام البداية!",
       onboarding_enter_workspace: "الدخول إلى مساحة عمل", onboarding_create_folder: "إنشاء مجلد", onboarding_upload_file: "رفع ملف", onboarding_preview_file: "معاينة ملف بنجاح", onboarding_create_mcp_key: "إنشاء مفتاح MCP", onboarding_mcp_tool_call: "استدعاء أداة MCP بنجاح",
       onboardingHint_enter_workspace: "افتح مساحة يمكنك الوصول إليها وابدأ الاستكشاف.", onboardingHint_create_folder: "نظّم مجلدك الأول في مساحة تتيح الكتابة.", onboardingHint_upload_file: "استخدم قائمة الرفع أو اسحب عملك وأفلته في مساحة تتيح الكتابة.", onboardingHint_preview_file: "افتح HTML أو صورة أو نصًا أو شفرة أو ملف Office وانتظر ظهوره. معاينة PDF الأصلية لا تُحتسب.", onboardingHint_create_mcp_key: "افتح تبويب مفتاح MCP في المركز الشخصي وأنشئ مفتاحًا.", onboardingHint_mcp_tool_call: "انسخ دليل الاستخدام من تبويب مفتاح MCP في المركز الشخصي، واضبط عميل MCP ثم استدعِ أداة بنجاح. الاتصال أو عرض قائمة الأدوات فقط لا يُحتسب.",
       onboardingStage_eyebrow: "بداية جديدة", onboardingStage_title: "دع عملك يحلّق.", onboardingStage_message: "الأشياء التي كانت موجودة في ذهنك فقط أصبح لها الآن باب يراها العالم من خلاله.", onboardingStage_dedication: "هذا التذكار يخص", onboardingStage_creator: "المبدع", onboardingStage_brand: "babaShare", onboardingStage_sceneDescription: "رفيقان يطويان العمل إلى طائرة ورقية تحلّق عبر ست نجوم للإنجازات.", onboardingStage_completed: "انطلق عملك. تذكارك جاهز.", onboardingStage_achievement1: "الدخول إلى مساحة عمل", onboardingStage_achievement2: "إنشاء مجلد", onboardingStage_achievement3: "رفع ملف", onboardingStage_achievement4: "معاينة ملف", onboardingStage_achievement5: "إنشاء مفتاح MCP", onboardingStage_achievement6: "استدعاء أداة MCP بنجاح"
@@ -87,6 +90,9 @@
       create: "创建",
       back: "返回",
       loading: "正在加载…",
+      pageLoadError: "页面未能完成加载，请重试或选择其他页面。",
+      pageLoadTimeout: "页面响应超时，请重试。",
+      pageReady: "页面内容已就绪。",
       emptyFiles: "文件夹还是空的",
       emptyFilesHint: "上传你的原型文件，开始分享作品。",
       uploadHint: "将多个文件拖放到这里，或使用上方上传按钮。",
@@ -302,6 +308,9 @@
       create: "Create",
       back: "Back",
       loading: "Loading…",
+      pageLoadError: "The page could not finish loading. Retry or select another page.",
+      pageLoadTimeout: "The page took too long to respond. Please retry.",
+      pageReady: "Page content is ready.",
       emptyFiles: "This folder is empty",
       emptyFilesHint: "Upload your prototype files to start sharing your work.",
       uploadHint: "Drop files here, or use the upload buttons above.",
@@ -522,6 +531,9 @@
       create: "إنشاء",
       back: "رجوع",
       loading: "جارٍ التحميل…",
+      pageLoadError: "تعذر إكمال تحميل الصفحة. أعد المحاولة أو اختر صفحة أخرى.",
+      pageLoadTimeout: "استغرقت الصفحة وقتًا طويلاً للاستجابة. أعد المحاولة.",
+      pageReady: "محتوى الصفحة جاهز.",
       emptyFiles: "هذا المجلد فارغ",
       emptyFilesHint: "ارفع ملفات النموذج الأولي لبدء مشاركة عملك.",
       uploadHint: "اسحب الملفات هنا أو استخدم أزرار الرفع.",

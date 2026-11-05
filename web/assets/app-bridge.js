@@ -1,47 +1,52 @@
 (() => {
   "use strict";
   window.AppBridgeHost = {
-    create({ iframe, context, handlers = {} }) {
-      let link = null,
-        connected = false;
-      function bind() {
-        link?.destroy();
-        connected = false;
-        link = BabaShareBridgeEndpoint(
-          () => iframe.contentWindow,
-          () => true,
-        );
-        link.handle("bridge.hello", () => {
-          connected = true;
-          return I18n.normalizeContext(context());
-        });
-        for (const [type, fn] of Object.entries(handlers))
-          link.handle(type, fn);
-      }
-      bind();
-      iframe.addEventListener("load", bind);
+    create({ iframe, context, handlers = {}, session = "", onState = () => {} }) {
+      let connected = false, sender = null, closed = false;
+      const retired = new Set();
+      const link = BabaShareBridgeEndpoint(
+        () => iframe.contentWindow,
+        (event) => !closed && typeof event.data.sender === "string" && !retired.has(event.data.sender) && (event.data.type === "bridge.hello" ? Boolean(event.data.requestId) : Boolean(sender) && event.data.sender === sender),
+        null, session,
+      );
+      link.handle("bridge.hello", (_, message) => {
+        if (sender && sender !== message.sender) {
+          retired.add(sender);
+          connected = false;
+          link.cancelPending();
+        }
+        sender = message.sender;
+        connected = true;
+        onState("connected");
+        return I18n.normalizeContext(context());
+      });
+      link.on("page.state", (payload) => {
+        if (!connected || payload?.version !== 1 || !["ready", "error"].includes(payload.state)) return;
+        onState(payload.state);
+      });
+      link.on("page.leaving", (payload) => {
+        if (!connected || payload?.version !== 1) return;
+        retired.add(sender);
+        connected = false; sender = null;
+        onState("loading");
+      });
+      for (const [type, fn] of Object.entries(handlers)) link.handle(type, fn);
       const host = {
         emit(type, payload) {
-          if (connected)
-            link.emit(type, type === "context.changed" ? I18n.normalizeContext(payload) : payload);
+          if (connected && !closed) link.emit(type, type === "context.changed" ? I18n.normalizeContext(payload) : payload);
         },
         request(type, payload) {
-          return connected
-            ? link.request(type, payload)
-            : Promise.resolve(true);
+          return connected && !closed ? link.request(type, payload) : Promise.resolve(true);
         },
-        on(type, fn) {
-          return link.on(type, fn);
-        },
-        handle(type, fn) {
-          return link.handle(type, fn);
-        },
+        on: link.on,
+        handle: link.handle,
         destroy() {
-          iframe.removeEventListener("load", bind);
-          link?.destroy();
+          closed = true; connected = false;
+          link.destroy();
+          window.removeEventListener("pagehide", host.destroy);
         },
       };
-      window.addEventListener("pagehide", () => host.destroy(), { once: true });
+      window.addEventListener("pagehide", host.destroy, { once: true });
       return host;
     },
   };

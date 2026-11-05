@@ -50,7 +50,7 @@ function realm({ canWrite = true, kind = "file", name = "index.html", dir = "ltr
   const context = vm.createContext({ document, window: { innerHeight: height, addEventListener: (type, fn) => { events[type] = fn; } },
     URL, location: new URL("https://example.test/baba-share/workspace.html"),
     I18n: { t: (key) => key, ctx: { dir } },
-    UI: { size: () => "1KB", date: () => "", empty: () => el("p") },
+    UI: { loading: (node, key) => { node.textContent = key; }, size: () => "1KB", date: () => "", empty: () => el("p") },
     el, button, icon: () => el("svg"), iconButton: (key) => el("button", { key }), $: (key) => nodes.get(key),
     workspace: { id: "space", canWrite, workspaceName: "空间" },
     entries: [{ kind, name, path: "目录/" + name, size: 1, canWrite }],
@@ -65,6 +65,43 @@ function realm({ canWrite = true, kind = "file", name = "index.html", dir = "ltr
   vm.runInContext(section("  async function downloadFile", "  async function previewFile"), context);
   return { context, document, nodes, events, calls, links, el, button, run: (code) => vm.runInContext(code, context) };
 }
+
+test("文件夹整行非交互区域进入，按钮及原生交互冒泡不误导航", async () => {
+  const app = realm({ kind: "folder", name: "文档" }), opened = [];
+  app.context.openFolder = async (value) => opened.push(value);
+  app.context.window.getSelection = () => ({ toString: () => "" });
+  app.run("renderFiles()");
+  const row = app.nodes.get("#file-list").children[0];
+  const click = (target, init = {}) => {
+    const event = { button: 0, target, preventDefault() { this.defaultPrevented = true; }, ...init };
+    row.onclick(event); return event;
+  };
+  for (const target of [row, ...row.children.slice(0, -1)]) {
+    target.closest = () => null;
+    assert.equal(click(target).defaultPrevented, true);
+  }
+  const actionsCell = row.children.at(-1), actionsContainer = actionsCell.children[0];
+  assert.equal(actionsCell.attrs.class, "file-row-actions");
+  for (const target of [actionsCell, actionsContainer]) {
+    target.closest = (selector) => selector.includes(".file-row-actions") ? actionsCell : null;
+    assert.equal(click(target).defaultPrevented, undefined, "操作单元格及容器空白均不进入目录");
+  }
+  assert.equal(opened.length, row.children.length);
+  assert(opened.every((value) => value === "目录/文档"));
+  const before = opened.length;
+  for (const tag of ["a", "button", "input", "select", "textarea", "details", "summary", "label", '[role="button"]', '[role="menu"]', '[contenteditable]:not([contenteditable="false"])']) {
+    const target = { closest(selector) { assert(selector.includes(tag)); return this; } };
+    click(target);
+  }
+  for (const init of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }, { defaultPrevented: true }]) click(row, init);
+  app.context.window.getSelection = () => ({ toString: () => "已选文本" });
+  click(row);
+  assert.equal(opened.length, before);
+  await row.children[0].children[0].onclick();
+  assert.equal(opened.length, before + 1, "名称按钮的原生键盘click仍可进入");
+  const file = realm(); file.run("renderFiles()");
+  assert.equal(file.nodes.get("#file-list").children[0].onclick, undefined);
+});
 
 test("三档成员权限由空间契约控制，manager显示管理按钮且不依赖账户角色", () => {
   for (const memberRole of ["viewer", "editor", "manager"]) {
@@ -120,7 +157,7 @@ test("真实文件列表成功渲染后才发进入空间回执，失败不记�
     const app = realm(), calls = [];
     app.nodes.set("#file-browser", app.el("section"));
     Object.assign(app.context, { AbortController, controller: null, requestId: 0, query: "", me: { role: "editor" },
-      page: { embedded: false }, pager: { pageIndex: 1, pageSize: 20, busy() {}, accept: () => true },
+      page: { embedded: false, fail() {} }, pager: { pageIndex: 1, pageSize: 20, busy() {}, accept: () => true },
       updateUrl() {}, refreshQuota: async () => {}, renderFiles: () => calls.push("render"),
       API: async (key) => { calls.push(key); if (key === "nodes" && failed) throw new Error("offline"); return { entries: [] }; },
     });
@@ -171,11 +208,12 @@ test("工作区操作保留等宽列和末侧对齐，按内容定行高并维�
 test("创建入口参数在子页消费一次，取消重载不重复打开且未知账户角色不打开", async () => {
   for (const action of ["create", "unknown", null]) for (const role of ["editor", ""]) {
     const context = { URL, location: new URL("https://example.test/baba-share/workspace.html" + (action ? "?action=" + action : "")),
-      me: null, workspaces: [], workspace: null, page: { ready: Promise.resolve() },
+      me: null, workspaces: [], workspace: null, page: { ready: Promise.resolve(), complete: async () => {}, fail() {} },
       history: { state: null, replaceState(_, __, url) { context.location = new URL(url); } },
       API: async (key) => key === "me" ? { role } : [], readUrl() {}, renderChrome() {},
       async createWorkspace() { if (["admin", "editor"].includes(context.me.role)) context.opened++; }, opened: 0,
       $: () => ({ classList: { add() {} } }), errorText: () => "失败" };
+    context.window = context;
     vm.createContext(context);
     const startup = script.slice(script.indexOf("  await page.ready;"), script.lastIndexOf("})();"));
     await vm.runInContext("(async () => {" + startup + "})()", context);
@@ -214,12 +252,13 @@ test("上传新手引导复用上传菜单，参数仅消费一次且只读不�
   for (const canWrite of [false, true]) {
     const menu = { open: false, querySelector: () => ({ focus() { context.focused++; } }) };
     const context = { URL, location: new URL("https://example.test/baba-share/workspace.html?workspaceId=space&onboardingTask=upload_file"),
-      me: null, workspace: null, workspaces: [], page: { ready: Promise.resolve() }, focused: 0, notices: [],
+      me: null, workspace: null, workspaces: [], page: { ready: Promise.resolve(), complete: async () => {}, fail() {} }, focused: 0, notices: [],
       history: { state: null, replaceState(_, __, url) { context.location = new URL(url); } },
       API: async (key) => key === "me" ? { role: "editor" } : [{ id: "space", canWrite }],
       readUrl() {}, renderChrome() {}, loadFiles: async () => {}, loadMembers: async () => {},
       $: (selector) => { assert.equal(selector, "#file-actions .upload-menu"); return menu; },
       toast: (message) => context.notices.push(message), I18n: { t: (key) => key }, errorText: (error) => error.message };
+    context.window = context;
     vm.createContext(context);
     const startup = script.slice(script.indexOf("  await page.ready;"), script.lastIndexOf("})();"));
     await vm.runInContext("(async () => {" + startup + "})()", context);

@@ -8,6 +8,7 @@
   let previewBase = null;
   let previewViewer = null;
   let loadingSequence = 0;
+  let metadataController = null;
   const directoryCache = new Map();
   const shell = $("#share-shell");
   const layout = $("#share-layout");
@@ -19,6 +20,7 @@
   let normalTreeCollapsed = false;
   let treeCloseTimer;
   let pointerInTree = false;
+  const narrowScreen = window.matchMedia("(max-width: 520px)");
   UI.settingsControls($("#share-controls"));
   const toggle = el(
     "button",
@@ -31,8 +33,9 @@
       onclick: () => setTreeOpen(layout.classList.contains("tree-collapsed")),
     },
     icon("tree"),
+    el("span", { "data-i18n": "shareTree", text: I18n.t("shareTree") }),
   );
-  $("#share-controls").prepend(toggle);
+  $("#share-navigation").append(toggle);
   const fullscreen = button("fullscreen", enterFullscreen, "", "fullscreen");
   const edge = el(
     "button",
@@ -54,7 +57,13 @@
   );
   edge.hidden = true;
   shell.append(edge);
-  $("#preview-actions").append(fullscreen);
+  const openWindow = el("a", { class: "button-link", target: "_blank", rel: "noopener noreferrer", referrerpolicy: "no-referrer", "data-i18n": "shareOpenWindow", text: I18n.t("shareOpenWindow") });
+  const downloadCurrent = el("a", { class: "button-link primary", referrerpolicy: "no-referrer" }, icon("download"), el("span", { "data-i18n": "previewDownload", text: I18n.t("previewDownload") }));
+  openWindow.hidden = true;
+  downloadCurrent.hidden = true;
+  fullscreen.setAttribute("data-i18n-label", "fullscreen");
+  $("#preview-actions").append(fullscreen, openWindow, downloadCurrent);
+  if (narrowScreen.matches) setTreeOpen(false);
 
   function setTreeOpen(open) {
     clearTimeout(treeCloseTimer);
@@ -124,7 +133,18 @@
   }
   // Esc 由浏览器处理，沙箱原型持有焦点时父页也能正确恢复。
   document.addEventListener("fullscreenchange", syncFullscreen);
+  function previewState(value) {
+    const busy = value === "loading";
+    $("#share-preview-area").setAttribute("aria-busy", String(busy));
+    $("#share-loading").hidden = !busy;
+    const announcement = $("#share-status");
+    announcement.textContent = "";
+    announcement.removeAttribute("data-i18n");
+    if (busy) { announcement.setAttribute("data-i18n", "loading"); announcement.textContent = I18n.t("loading"); }
+    else if (value === "ready") { announcement.setAttribute("data-i18n", "pageReady"); announcement.textContent = I18n.t("pageReady"); }
+  }
   function state(title, hint) {
+    previewState("error");
     previewViewer?.dispose();
     previewViewer = null;
     $("#shared-frame").hidden = true;
@@ -145,13 +165,26 @@
       return;
     }
     currentFile = entry.path;
-    if (!previewViewer) previewViewer = FilePreview.create($("#share-stage"));
+    if (!previewViewer) previewViewer = FilePreview.create($("#share-preview-area"), {
+      externalLoading: true, retry: true, onState: previewState,
+    });
     previewViewer.load({ ...entry,
       url: previewBase + entry.path.split("/").map(encodeURIComponent).join("/"),
     });
     $("#shared-frame").hidden = true;
     $("#share-state").hidden = true;
-    $("#share-current").textContent = entry.path;
+    renderCurrentFile();
+    const openUrl = new URL(location.pathname, location.origin);
+    openUrl.searchParams.set("file", entry.path);
+    openUrl.searchParams.set("view", "file");
+    openWindow.href = openUrl.href;
+    const downloadUrl = new URL(previewBase + entry.path.split("/").map(encodeURIComponent).join("/"), location.href);
+    downloadUrl.searchParams.set("download", "1");
+    downloadCurrent.href = downloadUrl.href;
+    downloadCurrent.download = entry.name;
+    openWindow.hidden = false;
+    downloadCurrent.hidden = false;
+    if (!immersive && narrowScreen.matches) setTreeOpen(false);
     document
       .querySelectorAll("#share-tree button[data-path]")
       .forEach((item) => {
@@ -172,6 +205,7 @@
     };
     const response = await API("shareDetail", {
       query: { token, path, pageIndex: nextPage, pageSize: 50 },
+      signal: metadataController?.signal,
     });
     const listing = response.listing;
     cache.entries = nextPage === 1 ? listing.entries : cache.entries.concat(listing.entries);
@@ -256,6 +290,7 @@
           {
             type: "button",
             "data-path": entry.path,
+            title: entry.name,
             onclick: () => selectFile(entry),
           },
           icon(/\.html?$/i.test(entry.name) ? "code" : "file"),
@@ -288,21 +323,44 @@
       list.append(el("li", { class: "tree-more" }, more));
     }
   }
+  function renderCurrentFile() {
+    const name = currentFile.split("/").pop();
+    const heading = $("#share-title");
+    heading.removeAttribute("data-i18n");
+    heading.textContent = name || I18n.t("sharedPreview");
+    heading.setAttribute("title", name || I18n.t("sharedPreview"));
+    $("#share-current").textContent = currentFile;
+    const type = $("#share-file-type");
+    const extension = name?.includes(".") ? name.split(".").pop() : "";
+    type.textContent = extension ? extension.toUpperCase() : I18n.t("file");
+    type.hidden = !currentFile;
+    document.title = `${name || I18n.t("sharedPreview")} · babaShare`;
+  }
   function render() {
     if (!share) return;
-    $("#share-title").textContent = I18n.t("sharedPreview");
+    renderCurrentFile();
     $("#share-folder-title").textContent = I18n.t("shareTree");
     $("#share-expiry").textContent =
       I18n.t("expires") + ": " + UI.date(share.expireTime);
     renderDirectory("", $("#share-tree"));
-    document.title = `${I18n.t("sharedPreview")} · babaShare`;
   }
   I18n.subscribe(render);
   I18n.apply(I18n.ctx);
   async function load() {
     const request = ++loadingSequence;
-    $("#share-status").textContent = I18n.t("loading");
-    $("#share-stage").setAttribute("aria-busy", "true");
+    metadataController?.abort();
+    const controller = new AbortController();
+    metadataController = controller;
+    previewState("loading");
+    $("#share-state").hidden = true;
+    const timeout = setTimeout(() => {
+      if (request !== loadingSequence) return;
+      ++loadingSequence;
+      controller.abort();
+      metadataController = null;
+      state("shareInvalid", "pageLoadTimeout");
+      $("#share-state").append(button("retry", load));
+    }, 30000);
     try {
       if (!token) throw new Error("INVALID_SHARE");
       const response = await fetchDirectory("");
@@ -316,17 +374,16 @@
         selectFile({ name: initial.split("/").pop(), path: initial });
       else state("shareEmpty", "selectFile");
       render();
-      $("#share-status").textContent = "";
     } catch (error) {
       if (request !== loadingSequence) return;
-      $("#share-status").textContent = "";
       state("shareInvalid", "shareNotFound");
       $("#share-state").append(button("retry", load));
       console.warn("Share load failed", error.status || error.name);
     } finally {
-      if (request === loadingSequence)
-        $("#share-stage").setAttribute("aria-busy", "false");
+      clearTimeout(timeout);
+      if (metadataController === controller) metadataController = null;
     }
   }
+  window.addEventListener("pagehide", () => { ++loadingSequence; metadataController?.abort(); });
   await load();
 })();

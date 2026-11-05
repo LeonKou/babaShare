@@ -22,9 +22,9 @@ async function environment(options = {}) {
   const context = {
     console, URL, location: new URL("http://localhost/baba-share/onboarding.html"),
     I18n: { t: (key) => key, subscribe: () => () => {} },
-    UI: { $: (selector) => { if (!elements.has(selector)) elements.set(selector, el("div")); return elements.get(selector); }, el,
+    UI: { loading: (node) => { node.textContent = "loading"; }, $: (selector) => { if (!elements.has(selector)) elements.set(selector, el("div")); return elements.get(selector); }, el,
       button: (key, action) => { const node = el("button", { text: key }); node.action = action; return node; },
-      page: () => ({ ready: Promise.resolve(), embedded: true, on() {}, request: async (type, payload) => { navigation.push({ type, payload }); return true; } }),
+      page: () => ({ ready: Promise.resolve(), complete: async () => {}, fail() {}, embedded: true, on() {}, request: async (type, payload) => { navigation.push({ type, payload }); return true; } }),
       errorText: () => "error", toast() {},
       dialog: (title, build) => {
         const node = el("dialog", {}, el("h2", { text: title }));
@@ -101,7 +101,7 @@ test("母版同样拒绝不完整响应，不展示错误进度且可重新请�
   const shell = fs.readFileSync(path.join(root, "web/assets/shell.js"), "utf8");
   const refresh = shell.slice(shell.indexOf("  let onboarding ="), shell.indexOf('  window.addEventListener("focus", refreshOnboarding)'));
   let value = state(), renders = 0, requests = 0;
-  const context = { user: { role: "editor" }, API: async () => { requests++; return value; }, renderNav: () => renders++, console: { warn() {} } };
+  const context = { user: { role: "editor" }, OnboardingFeedback: { create: () => ({ accept() {} }) }, disposed: false, startupState: "ready", startupController: new AbortController(), API: async () => { requests++; return value; }, renderNav: () => renders++, console: { warn() {} } };
   vm.runInNewContext(refresh + ";globalThis.refresh = refreshOnboarding; globalThis.current = () => onboarding;", context);
   await context.refresh();
   assert.equal(context.current(), value);

@@ -466,13 +466,15 @@
           ...(parentTitle ? [el("li", {}, el("button", { type: "button", text: parentTitle, onclick: requestClose }))] : []),
           el("li", { "aria-current": "page", text: title }));
         const breadcrumb = el("nav", { class: "crumbs form-drawer-crumbs", "aria-label": I18n.t("breadcrumb"), "data-i18n-label": "breadcrumb" }, crumbs);
-        node.append(breadcrumb, el("header", { class: "form-drawer-header" }, back, heading, dismiss));
+        node.append(breadcrumb);
         const save = button(saveKey, () => {}, "primary");
         save.type = "submit";
         const cancel = button("cancel", requestClose);
         const exits = [back, dismiss, cancel, ...crumbs.querySelectorAll("button")];
-        const footer = el("div", { class: "form-feedback" }, status, el("div", { class: "actions" }, cancel, save));
-        form.append(body, footer);
+        const header = el("header", { class: "form-drawer-header" }, back, heading,
+          el("div", { class: "actions form-drawer-actions" }, cancel, save, dismiss));
+        const feedback = el("div", { class: "form-feedback" }, status);
+        form.append(header, body, feedback);
         const markChanged = () => {
           changed = true;
           if (dirty) window.AppPage?.setDirty(true);
@@ -646,6 +648,7 @@
       body: body ? JSON.stringify(body) : undefined,
       signal,
     });
+    signal?.throwIfAborted();
     if (response.status === 204) return {};
     let data;
     try {
@@ -661,6 +664,7 @@
               : "INTERNAL_ERROR",
       };
     }
+    signal?.throwIfAborted();
     if (!response.ok) {
       const e = new Error(data.status);
       e.status = data.status;
@@ -756,7 +760,18 @@
       accent.value = ctx.accent;
     });
   }
+  const initialLoadingNodes = new WeakMap();
+  function loading(node, key = "loading") {
+    node.removeAttribute("data-i18n");
+    const page = window.AppPage;
+    const text = document.createTextNode(page?.initializing && page.embedded ? "" : I18n.t(key));
+    node.replaceChildren(text);
+    if (page?.initializing) initialLoadingNodes.get(page)?.add(text);
+  }
   function page() {
+    let initializing = true, initialError = null, disposed = false, completion = null;
+    const main = $("main");
+    main?.setAttribute("aria-busy", "true");
     const adapter = {
       context: () => I18n.ctx,
       confirm: confirmDialog,
@@ -792,6 +807,44 @@
       },
     };
     const bridge = PageBridgeClient.create({ standalone: adapter });
+    initialLoadingNodes.set(bridge, new Set());
+    Object.defineProperty(bridge, "initializing", { get: () => initializing });
+    bridge.fail = (error) => { if (initializing) initialError = error || new Error("INITIALIZATION_FAILED"); };
+    bridge.complete = () => {
+      if (completion) return completion;
+      if (!initializing || disposed) return Promise.resolve();
+      completion = (async () => {
+        await bridge.ready;
+        if (disposed) return;
+        initializing = false;
+        if (initialError) initialLoadingNodes.get(bridge)?.forEach((text) => text.remove());
+        initialLoadingNodes.delete(bridge);
+        main?.setAttribute("aria-busy", "false");
+        bridge.emit("page.state", { version: 1, state: initialError ? "error" : "ready" });
+        window.removeEventListener("error", fatal);
+        window.removeEventListener("unhandledrejection", fatal);
+      })();
+      return completion;
+    };
+    const fatal = () => {
+      if (!initializing || disposed) return;
+      bridge.fail();
+      let status = $("#page-initial-error");
+      if (!status) {
+        status = el("div", { id: "page-initial-error", class: "status-line error", role: "alert", "data-i18n": "pageLoadError", text: I18n.t("pageLoadError") });
+        (main || document.body).prepend(status);
+      }
+      bridge.complete();
+    };
+    window.addEventListener("pageshow", (event) => { if (event.persisted) location.reload(); });
+    window.addEventListener("error", fatal);
+    window.addEventListener("unhandledrejection", fatal);
+    window.addEventListener("pagehide", () => {
+      disposed = true;
+      initialLoadingNodes.delete(bridge);
+      window.removeEventListener("error", fatal);
+      window.removeEventListener("unhandledrejection", fatal);
+    }, { once: true });
     bridge.ready.then((ctx) => {
       I18n.apply(ctx);
       if (!bridge.embedded) {
@@ -1033,6 +1086,7 @@
     invitationToken,
     invitationUrl,
     settingsControls,
+    loading,
     page,
     date,
     size,

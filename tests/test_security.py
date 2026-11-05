@@ -630,6 +630,7 @@ class Element {
  setAttribute(k,v){this.attributes[k]=v;if(k==='value')this.value=v;if(k==='name')this.name=v;if(k==='id')this.id=v;}
  getAttribute(k){return this.attributes[k];}
  removeAttribute(k){delete this.attributes[k];}
+ cloneNode(){const node=new Element(this.tag);node.contentWindow=this.contentWindow;node.replaceWith=this.replaceWith;return node;}
  addEventListener(k,fn){this.events[k]=fn;}
  removeEventListener(k,fn){if(this.events[k]===fn)delete this.events[k];}
  querySelector(){return null;}
@@ -639,10 +640,10 @@ class Element {
 }
 function runtime(path='workspace.html'){
  const nodes=new Map(),events=new Map(),replaces=[],requests=[];
- const get=s=>{if(!nodes.has(s))nodes.set(s,new Element());return nodes.get(s);};
+ const get=s=>{if(!nodes.has(s)){const node=new Element();node.replaceWith=replacement=>nodes.set(s,replacement);nodes.set(s,node);}return nodes.get(s);};
  const location={href:origin+'/baba-share/'+path,origin,protocol:'http:',pathname:'/baba-share/'+path,replace:u=>replaces.push(u),reload(){}};
  const document={readyState:'complete',documentElement:{lang:'zh-CN',dataset:{mode:'dark'}},body:new Element('body'),createElement:t=>new Element(t),createElementNS:(ns,t)=>new Element(t),createTextNode:text=>String(text),querySelector:s=>s==='script[src$="common.js"]'?{src:origin+'/baba-share/assets/common.js'}:get(s),querySelectorAll:()=>[]};
- const context={URL,console,setTimeout,clearTimeout,queueMicrotask,location,document,history:{replaceState(){}},FormData:class{constructor(form){return form.elements.filter(n=>n.name&&!n.disabled).map(n=>[n.name,n.value]);}},I18n:{t:k=>k,accents:['blue','green','purple','red','orange','teal'],normalizeContext:ctx=>({locale:ctx.locale,theme:ctx.theme,dir:ctx.dir,accent:ctx.accent||'blue'}),ctx:{locale:'zh-CN',theme:'dark',dir:'ltr',accent:'blue'},subscribe(){},apply(){},persist(){}},fetch:async(url,options)=>{requests.push({url:String(url),options});return {status:context.code,ok:context.code<400,json:async()=>context.data};},code:401,data:{status:'AUTH_REQUIRED'},addEventListener:(name,fn)=>{if(!events.has(name))events.set(name,new Set());events.get(name).add(fn);},removeEventListener:(name,fn)=>events.get(name)?.delete(fn)};
+ const context={URL,console,crypto:require('crypto').webcrypto,requestAnimationFrame:fn=>setImmediate(fn),setTimeout,clearTimeout,queueMicrotask,location,document,history:{replaceState(){}},FormData:class{constructor(form){return form.elements.filter(n=>n.name&&!n.disabled).map(n=>[n.name,n.value]);}},I18n:{t:k=>k,accents:['blue','green','purple','red','orange','teal'],normalizeContext:ctx=>({locale:ctx.locale,theme:ctx.theme,dir:ctx.dir,accent:ctx.accent||'blue'}),ctx:{locale:'zh-CN',theme:'dark',dir:'ltr',accent:'blue'},subscribe(){},apply(){},persist(){}},fetch:async(url,options)=>{requests.push({url:String(url),options});return {status:context.code,ok:context.code<400,json:async()=>context.data};},code:401,data:{status:'AUTH_REQUIRED'},addEventListener:(name,fn)=>{if(!events.has(name))events.set(name,new Set());events.get(name).add(fn);},removeEventListener:(name,fn)=>events.get(name)?.delete(fn)};
  context.window=context;context.parent=context;vm.createContext(context);
  const load=file=>vm.runInContext(fs.readFileSync(assets+'/'+file,'utf8'),context);
  load('common.js');load('api.js');
@@ -686,6 +687,7 @@ const settle=()=>new Promise(resolve=>setImmediate(resolve));
   host.load('bridge-core.js');host.load('app-bridge.js');child.load('bridge-core.js');child.load('page-bridge.js');
   host.context.API=async key=>key==='install'?{setupRequired:false}:key==='me'?{nickname:'Editor',role:'editor'}:[];
   await host.load('shell.js');assert.equal(host.get('#new-workspace').hidden,false);
+  child.context.location.href=host.get('#page-frame').src;
   const page=child.context.UI.page();await page.ready;assert.equal(page.embedded,true);page.setDirty(true);
   await Promise.allSettled([child.context.API('me'),child.context.API('workspaces'),host.context.UI.sessionExpired()]);
   assert.equal(child.replaces.length,0);assert.deepEqual(host.replaces,[origin+'/baba-share/auth.html']);assert.equal(page.dirty,false);
@@ -754,13 +756,13 @@ const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const sent=[],events=new Map(),target={postMessage:(message,origin)=>sent.push({message,origin})};
 const window={addEventListener:(name,fn)=>events.set(name,fn),removeEventListener:(name,fn)=>{if(events.get(name)===fn)events.delete(name)}};
 const timers=new Set();let timerId=0,clearCalls=0;
-const context={window,location:{origin:'http://127.0.0.1:12345'},console,setTimeout:()=>{const id=++timerId;timers.add(id);return id},clearTimeout:id=>{clearCalls++;timers.delete(id)}};
+const context={window,crypto:require('crypto').webcrypto,location:{origin:'http://127.0.0.1:12345'},console,setTimeout:()=>{const id=++timerId;timers.add(id);return id},clearTimeout:id=>{clearCalls++;timers.delete(id)}};
 vm.createContext(context);vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),context);
 (async()=>{
  const endpoint=window.BabaShareBridgeEndpoint(()=>target,()=>true);let accepted=0;
  endpoint.handle('probe',()=>{accepted++;return 'ok'});
  const receive=events.get('message');
- const event={origin:context.location.origin,source:target,data:{babaShare:true,version:1,type:'probe',requestId:'request-1',payload:{}}};
+ const event={origin:context.location.origin,source:target,data:{babaShare:true,version:1,session:'',sender:'test-child',type:'probe',requestId:'request-1',payload:{}}};
  await receive({...event,origin:'http://untrusted.invalid'});
  await receive({...event,source:{}});
  await receive({...event,data:{...event.data,version:2}});

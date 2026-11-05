@@ -94,7 +94,7 @@
   }
   async function load() {
     if (busy || (bridge.dirty && !(await UI.confirm(I18n.t("unsaved"))))) return;
-    setBusy(true); showStatus(I18n.t("loading"));
+    setBusy(true); showStatus(""); UI.loading(status);
     try {
       const me = await API("me");
       if (me.role !== "admin") throw { status: "PERMISSION_DENIED" };
@@ -104,8 +104,9 @@
       restore(); form.hidden = false;
       $("#quota-settings").hidden = false; quotaSummary();
       showStatus(mailError ? (mailError.httpStatus === 404 ? I18n.t("mailSettingsUnavailable") : errorText(mailError)) : "", Boolean(mailError));
-      if (mailError) status.append(button("retry", load));
+      if (mailError) { bridge.fail(mailError); status.append(button("retry", load)); }
     } catch (error) {
+      bridge.fail(error);
       showStatus(errorText(error), true); status.append(button("retry", load));
     } finally { setBusy(false); }
   }
@@ -176,4 +177,5 @@
   });
   await bridge.ready;
   await load();
+  await bridge.complete();
 })();

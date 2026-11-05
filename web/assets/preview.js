@@ -155,7 +155,7 @@
     blocks(article, text.replace(/\r\n?/g, "\n").split("\n"));
     return article;
   }
-  function create(host) {
+  function create(host, options = {}) {
     const { el } = UI;
     const root = el("section", { class: "file-preview", tabindex: "-1", "aria-label": I18n.t("filePreview"), "data-i18n-label": "filePreview" });
     const status = el("div", { class: "status-line", role: "status", "aria-live": "polite" });
@@ -163,20 +163,28 @@
     const content = el("div", { class: "file-preview-body" });
     download.hidden = true;
     const receiptStatus = el("div", { class: "status-line", role: "status", "aria-live": "polite" });
+    status.hidden = true;
+    receiptStatus.hidden = true;
     root.append(status, download, content, receiptStatus);
-    let receipt = null, receiptRetry = null;
+    let receipt = null, receiptRetry = null, previewRetry = null;
     host.append(root);
     let generation = 0, controller = null, blobUrl = null, media = null, frame = null, unsubscribe = null, messageHandler = null, timer = null, disposed = false;
     function clear() {
       ++generation;
       receipt = null;
       receiptStatus.textContent = "";
+      receiptStatus.hidden = true;
+      receiptStatus.removeAttribute("data-i18n");
       receiptRetry?.remove(); receiptRetry = null;
+      previewRetry?.remove(); previewRetry = null;
       controller?.abort(); controller = null;
       clearTimeout(timer); timer = null;
       if (messageHandler) window.removeEventListener("message", messageHandler);
       messageHandler = null;
       unsubscribe?.(); unsubscribe = null;
+      clearContent();
+    }
+    function clearContent() {
       if (frame) {
         if (["code", "office"].includes(frame.dataset.trusted)) frame.contentWindow?.postMessage({ type: "preview-" + frame.dataset.trusted + ".dispose", version: 1 }, location.origin);
         frame.src = "about:blank"; frame = null;
@@ -195,11 +203,14 @@
       const format = classify(entry.name);
       let completed = false, failed = false, receiptBusy = false, receiptDone = false;
       let onboardingTicket = typeof entry.onboardingTicket === "string" ? entry.onboardingTicket : null;
-      const complete = () => {
+      const complete = (recordReceipt = true) => {
         if (current !== generation || disposed || failed || completed) return;
         completed = true;
+        clearTimeout(timer); timer = null;
+        content.classList.remove("file-preview-pending");
         loaded();
-        if (!onboardingTicket || !window.API) return;
+        options.onState?.("ready");
+        if (!recordReceipt || !onboardingTicket || !window.API) return;
         receipt = async () => {
           if (receiptBusy || receiptDone || failed || current !== generation || disposed) return;
           receiptBusy = true;
@@ -207,12 +218,17 @@
           try {
             await API("onboardingPreview", { method: "POST", body: { ticket: onboardingTicket }, signal: controller.signal });
             receiptDone = true; onboardingTicket = null;
-            if (current !== generation || disposed) return;
+            if (current !== generation || disposed || failed) return;
             receiptStatus.textContent = "";
+            receiptStatus.hidden = true;
+            receiptStatus.removeAttribute("data-i18n");
             receiptRetry?.remove(); receiptRetry = null;
             if (window.AppPage?.embedded) window.AppPage.request("onboarding.changed", { version: 1 }).catch((error) => console.warn("Onboarding refresh failed", error));
+            else window.OnboardingFeedback?.refresh();
           } catch (error) {
             if (current !== generation || disposed || error.name === "AbortError") return;
+            receiptStatus.hidden = false;
+            receiptStatus.setAttribute("data-i18n", "onboardingReceiptFailed");
             receiptStatus.textContent = I18n.t("onboardingReceiptFailed");
             if (!receiptRetry) { receiptRetry = UI.button("onboardingRetry", () => receipt?.()); root.append(receiptRetry); }
           } finally { receiptBusy = false; if (receiptRetry) receiptRetry.disabled = false; }
@@ -220,30 +236,46 @@
         receipt();
       };
       const fail = (key) => {
-        if (current !== generation || disposed) return;
+        if (current !== generation || disposed || failed) return;
         failed = true; onboardingTicket = null; receipt = null;
+        clearTimeout(timer); timer = null;
+        controller?.abort();
+        unsubscribe?.(); unsubscribe = null;
+        if (messageHandler) window.removeEventListener("message", messageHandler);
+        messageHandler = null;
+        clearContent();
+        content.classList.remove("file-preview-pending");
         receiptRetry?.remove(); receiptRetry = null; receiptStatus.textContent = "";
+        receiptStatus.hidden = true; receiptStatus.removeAttribute("data-i18n");
         showError(key);
+        if (options.retry) { previewRetry = UI.button("retry", () => load(entry), "file-preview-retry"); root.append(previewRetry); }
+        options.onState?.("error");
       };
       controller = new AbortController();
       download.hidden = true;
       download.removeAttribute("href");
-      status.classList.remove("error"); setStatus("loading"); root.setAttribute("aria-busy", "true");
+      status.classList.remove("error");
+      if (options.externalLoading) { status.hidden = true; status.textContent = ""; status.removeAttribute("data-i18n"); }
+      else setStatus("loading");
+      content.classList.add("file-preview-pending");
+      root.setAttribute("aria-busy", "true");
+      options.onState?.("loading");
+      timer = setTimeout(() => fail("previewRendererFailed"), format.kind === "office" ? 120000 : 30000);
       try {
         const url = fileUrl(entry.url), target = new URL(url);
         target.searchParams.set("download", "1"); download.href = target.href; download.download = entry.name;
-        if (format.kind === "unsupported") { showError("previewUnsupported"); return; }
-        if (Number(entry.size) > format.limit) { showError("PREVIEW_TOO_LARGE"); return; }
+        if (format.kind === "unsupported") { fail("previewUnsupported"); return; }
+        if (Number(entry.size) > format.limit) { fail("PREVIEW_TOO_LARGE"); return; }
         if (format.kind === "html") {
           await readBytes(url, format.limit, controller.signal);
-          if (current !== generation || disposed) return;
+          if (current !== generation || disposed || failed) return;
           frame = el("iframe", { class: "preview-frame", title: I18n.t("filePreview"), "data-i18n-title": "filePreview", sandbox: "allow-scripts", allow: "fullscreen", allowfullscreen: "", referrerpolicy: "no-referrer" });
           frame.addEventListener("load", complete);
           frame.addEventListener("error", () => fail("previewReadFailed"));
           frame.src = url.href; content.append(frame); return;
         }
         const bytes = await readBytes(url, format.limit, controller.signal);
-        if (current !== generation || disposed) return;
+        if (current !== generation || disposed || failed) return;
         if (format.kind === "office") {
           frame = el("iframe", { class: "preview-frame", title: I18n.t("previewOffice"), "data-i18n-title": "previewOffice", sandbox: "allow-scripts allow-same-origin", src: "/baba-share/preview-office.html", referrerpolicy: "no-referrer" });
           frame.dataset.trusted = "office";
@@ -261,14 +293,13 @@
           };
           window.addEventListener("message", messageHandler);
           unsubscribe = I18n.subscribe(sendContext);
-          timer = setTimeout(() => { fail("previewRendererFailed"); }, 120000);
           content.append(frame); return;
         }
         if (["code", "text", "markdown"].includes(format.kind)) {
           let text;
           try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
-          catch { showError("previewEncodingUnsupported"); return; }
-          if (text.includes("\u0000")) { showError("previewEncodingUnsupported"); return; }
+          catch { fail("previewEncodingUnsupported"); return; }
+          if (text.includes("\u0000")) { fail("previewEncodingUnsupported"); return; }
           if (format.kind === "code") {
             frame = el("iframe", { class: "preview-frame", title: I18n.t("previewCode"), "data-i18n-title": "previewCode", sandbox: "allow-scripts allow-same-origin", src: "/baba-share/preview-code.html", referrerpolicy: "no-referrer" });
             frame.dataset.trusted = "code";
@@ -283,7 +314,6 @@
             };
             window.addEventListener("message", messageHandler);
             unsubscribe = I18n.subscribe(send);
-            timer = setTimeout(() => { fail("previewRendererFailed"); }, 30000);
             content.append(frame); return;
           }
           content.append(format.kind === "markdown" ? markdown(text) : el("pre", { class: "file-preview-text", text, tabindex: "0", dir: "auto", "aria-label": I18n.t("filePreview") }));
@@ -297,7 +327,8 @@
           } else if (format.kind === "pdf") {
             frame = el("iframe", { class: "preview-frame", src: blobUrl, title: I18n.t("filePreview"), "data-i18n-title": "filePreview", referrerpolicy: "no-referrer" });
             // 浏览器原生PDF查看器无可信渲染完成协议，不把iframe load作为任务成功凭据。
-            frame.addEventListener("load", () => { if (current === generation && !disposed) loaded(); });
+            frame.addEventListener("load", () => complete(false));
+            frame.addEventListener("error", () => fail("previewRendererFailed"));
             content.append(frame);
           } else {
             media = el(format.kind, { class: "file-preview-media", controls: "", preload: "metadata", src: blobUrl, "aria-label": entry.name });

@@ -29,9 +29,9 @@
   async function load() {
     if (busy) return;
     busy = true; messageKey = ""; render(); region.setAttribute("aria-busy", "true");
-    status.classList.remove("error"); status.textContent = I18n.t("loading");
+    status.classList.remove("error"); UI.loading(status);
     try { detail = await API("accountEmail"); status.textContent = ""; messageKey = ""; }
-    catch (error) { status.textContent = errorText(error); status.classList.add("error"); }
+    catch (error) { window.AppPage.fail(error); status.textContent = errorText(error); status.classList.add("error"); }
     finally {
       busy = false; region.setAttribute("aria-busy", "false"); render();
       if (!detail) actions.replaceChildren(button("retry", load));
@@ -59,6 +59,6 @@
     }
   }
   I18n.subscribe(render);
-  await window.AppPage.ready;
-  await load();
+  window.AccountEmailReady = window.AppPage.ready.then(load);
+  await window.AccountEmailReady;
 })();

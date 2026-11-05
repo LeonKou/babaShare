@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="/baba-share/assets/components.css" />
     <link rel="stylesheet" href="/baba-share/assets/layout.css" />
     <link rel="stylesheet" href="/baba-share/assets/preview.css" />
+    <link rel="stylesheet" href="/baba-share/assets/product-demo.css" />
   </head>
   <body class="share-body">
     <div class="share-shell" id="share-shell">
@@ -21,7 +22,18 @@
           ><strong>babaShare</strong></a
           ><span class="badge" data-i18n="sharedReadonly">只读分享</span>
         </div>
-        <div class="actions" id="share-controls"></div>
+        <div class="actions">
+          <div class="actions" id="share-controls"></div>
+          <a
+            class="button-link"
+            id="share-login"
+            href="/baba-share/auth.html"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-i18n="login"
+            >登录</a
+          >
+        </div>
       </header>
       <div class="share-layout" id="share-layout">
         <aside class="share-sidebar" id="share-sidebar">
@@ -37,38 +49,46 @@
         </aside>
         <main class="share-stage" id="share-stage">
           <header class="preview-bar">
-            <div>
-              <h1
-                id="share-title"
-                class="share-title"
-                data-i18n="sharedPreview"
-              >
-                分享预览
-              </h1>
-              <p id="share-current" class="small muted"></p>
+            <div class="share-preview-heading">
+              <div id="share-navigation"></div>
+              <div class="share-file-heading">
+                <h1
+                  id="share-title"
+                  class="share-title"
+                  data-i18n="sharedPreview"
+                >
+                  分享预览
+                </h1>
+                <div class="share-file-meta">
+                  <bdi id="share-file-type" class="share-file-type small" hidden></bdi>
+                  <p id="share-current" class="small muted" dir="auto"></p>
+                </div>
+              </div>
             </div>
             <div id="preview-actions" class="actions"></div>
           </header>
-          <div
-            id="share-status"
-            class="status-line"
-            role="status"
-            aria-live="polite"
-            data-i18n="loading"
-          >
-            正在加载…
+          <div class="share-preview-area" id="share-preview-area" aria-busy="true">
+            <div id="share-loading" class="page-loading">
+              <div class="product-demo page-loading-art" data-product-demo data-loading-demo></div>
+            </div>
+            <div
+              id="share-status"
+              class="sr-only"
+              role="status"
+              aria-live="polite"
+            ></div>
+            <iframe
+              id="shared-frame"
+              class="preview-frame"
+              title="分享预览"
+              data-i18n-title="sharedPreview"
+              sandbox="allow-scripts"
+              allow="fullscreen"
+              allowfullscreen
+              hidden
+            ></iframe>
+            <div id="share-state" class="empty" hidden></div>
           </div>
-          <iframe
-            id="shared-frame"
-            class="preview-frame"
-            title="分享预览"
-            data-i18n-title="sharedPreview"
-            sandbox="allow-scripts"
-            allow="fullscreen"
-            allowfullscreen
-            hidden
-          ></iframe>
-          <div id="share-state" class="empty" hidden></div>
         </main>
       </div>
     </div>
@@ -76,6 +96,7 @@
     <script src="/baba-share/assets/i18n.js"></script>
     <script src="/baba-share/assets/common.js"></script>
     <script src="/baba-share/assets/api.js"></script>
+    <script src="/baba-share/assets/product-demo.js"></script>
     <script src="/baba-share/assets/preview.js"></script>
     <script src="/baba-share/assets/share.js"></script>
   </body>

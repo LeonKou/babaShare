@@ -237,7 +237,7 @@
         return el(
           "article",
           { class: "card workspace-card", onclick: (event) => {
-            if (event.target.closest("a, button, input, select, textarea, summary, footer")) return;
+            if (event.target.closest('a,button,input,select,textarea,details,summary,label,footer,[role="button"],[role="menu"],[contenteditable]:not([contenteditable="false"])')) return;
             return open(event);
           } },
           el(
@@ -434,7 +434,13 @@
         if (!folder || entry.canWrite) actions.append(rowActions(entry));
         return el(
           "tr",
-          {},
+          folder ? { class: "folder-row", onclick: (event) => {
+            if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey ||
+                event.target.closest('.file-row-actions,a,button,input,select,textarea,details,summary,label,[role="button"],[role="menu"],[contenteditable]:not([contenteditable="false"])') ||
+                window.getSelection()?.toString()) return;
+            event.preventDefault();
+            openFolder(entry.path).catch((error) => toast(errorText(error), { kind: "error" }));
+          } } : {},
           el("td", {}, name),
           el("td", {
             class: "small muted",
@@ -448,7 +454,7 @@
             class: "small muted num",
             text: UI.date(entry.updateTime),
           }),
-          el("td", {}, actions),
+          el("td", { class: "file-row-actions" }, actions),
         );
       }),
     );
@@ -504,7 +510,7 @@
     controller = new AbortController();
     const current = ++requestId;
     $("#file-status").classList.remove("error");
-    $("#file-status").textContent = I18n.t("loadingFiles");
+    UI.loading($("#file-status"), "loadingFiles");
     $("#file-browser").setAttribute("aria-busy", "true");
     pager.busy(true);
     try {
@@ -531,6 +537,7 @@
         try { await API("onboardingVisit", { method: "POST", body: { workspaceId: workspace.id } }); }
         catch (_) { toast(I18n.t("onboardingVisitFailed"), { kind: "error" }); }
         if (page.embedded) page.request("onboarding.changed", { version: 1 }).catch((error) => console.warn("Onboarding refresh failed", error));
+        else window.OnboardingFeedback?.refresh();
       }
       if (current !== requestId) return;
       await refreshQuota();
@@ -539,7 +546,10 @@
     } catch (e) {
       if (e.name === "AbortError") return;
       if (current !== requestId) return;
+      page.fail(e);
+      $("#file-empty").hidden = true;
       $("#file-status").textContent = errorText(e);
+      $("#file-status").append(button("retry", loadFiles));
       $("#file-status").classList.add("error");
     } finally {
       if (current === requestId) {
@@ -557,7 +567,11 @@
       members = result;
       renderMembers();
     } catch (e) {
-      if (sequence === memberRequestId && workspace === target) toast(errorText(e), { kind: "error" });
+      if (sequence === memberRequestId && workspace === target) {
+        page.fail(e);
+        $("#member-list").replaceChildren(el("li", { class: "error", text: errorText(e) }));
+        toast(errorText(e), { kind: "error" });
+      }
     }
   }
   function renderMembers() {
@@ -1120,6 +1134,7 @@
   await page.ready;
   try {
     me = await API("me");
+    await window.OnboardingFeedback?.connect(page, me);
     workspaces = await API("workspaces");
     const url = new URL(location.href), id = url.searchParams.get("workspaceId");
     const createRequested = url.searchParams.get("action") === "create";
@@ -1136,6 +1151,7 @@
     readUrl();
     renderChrome();
     if (workspace) await Promise.all([loadFiles(), loadMembers()]);
+    await page.complete();
     if (createRequested) await createWorkspace();
     if (me.role !== "admin" && onboardingTask) {
       if (["create_folder", "upload_file"].includes(onboardingTask) && !workspace?.canWrite) {
@@ -1154,5 +1170,6 @@
   } catch (e) {
     $("#workspace-status").textContent = errorText(e);
     $("#workspace-status").classList.add("error");
-  }
+    page.fail(e);
+  } finally { await page.complete(); }
 })();

@@ -6,7 +6,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const read = (name) => fs.readFileSync(path.join(__dirname, "../web", name), "utf8");
 
-function runtime({ reduced = false, compact = false, observe = true, auth = false } = {}) {
+function runtime({ reduced = false, compact = false, observe = true, auth = false, loading = false } = {}) {
   class Events {
     constructor() { this.listeners = new Map(); }
     addEventListener(type, fn) { if (!this.listeners.has(type)) this.listeners.set(type, new Set()); this.listeners.get(type).add(fn); }
@@ -21,6 +21,7 @@ function runtime({ reduced = false, compact = false, observe = true, auth = fals
     querySelectorAll() { return this.children.flatMap((child) => [child, ...child.querySelectorAll()]); }
   }
   const document = new Events(), root = new Element("aside"); root.id = auth ? "auth-product-demo" : "test-demo";
+  if (loading) root.dataset.loadingDemo = "";
   document.documentElement = { lang: "zh-CN", dataset: { mode: "dark", accent: "blue" } };
   document.hidden = false;
   document.createElement = (tag) => new Element(tag);
@@ -153,6 +154,26 @@ test("隐藏、离屏、小屏和BFCache暂停，恢复后自动继续", () => {
   assert.equal(runtime({ compact: true, observe: false }).root.dataset.running, "false");
 });
 
+test("母版加载插画小屏仍搬运三张纸，减动与离屏可靠暂停", () => {
+  const app = runtime({ loading: true, compact: true });
+  app.visible(true);
+  assert.equal(app.root.dataset.running, "true");
+  assert.equal(app.nodes.filter((node) => node.attrs.class === "demo-loader-sheet").length, 3);
+  assert(!app.nodes.some((node) => ["text", "button", "a", "input"].includes(node.tag)));
+  app.visible(false); assert.equal(app.root.dataset.running, "false");
+  app.visible(true); assert.equal(app.root.dataset.running, "true");
+  app.document.hidden = true; app.document.fire("visibilitychange");
+  assert.equal(app.root.dataset.running, "false");
+  app.document.hidden = false; app.document.fire("visibilitychange");
+  app.reduce.matches = true; app.reduce.fire("change");
+  assert.equal(app.root.dataset.running, "false");
+  app.reduce.matches = false; app.reduce.fire("change");
+  assert.equal(app.root.dataset.running, "true");
+  app.context.fire("pagehide", {});
+  app.visible(true); assert.equal(app.root.dataset.running, "false");
+  assert.equal(runtime({ loading: true, compact: true, reduced: true, observe: false }).root.dataset.running, "false");
+});
+
 test("减少动画首屏及动态切换均静态，取消减少动画后自动继续", () => {
   const app = runtime({ reduced: true }); app.visible(true);
   assert.equal(app.root.dataset.running, "false");
@@ -214,7 +235,13 @@ test("接入只限留白表单页，安全验证居中，高密度页面无演�
   for (const page of ["reset-password", "email-verification"]) {
     assert(read(page + ".html").includes("auth-focused")); assert(!read(page + ".html").includes("product-demo.js"));
   }
-  for (const page of ["workspace", "users", "workspace-admin", "account", "share"]) assert(!read(page + ".html").includes("product-demo"));
+  for (const page of ["workspace", "users", "workspace-admin", "account"]) assert(!read(page + ".html").includes("product-demo"));
+  const share = read("share.html");
+  assert.match(share, /id="share-loading" class="page-loading"/);
+  assert.match(share, /class="product-demo page-loading-art" data-product-demo data-loading-demo/);
+  assert(share.includes("assets/product-demo.css"));
+  assert(share.includes("assets/product-demo.js"));
+  assert(share.indexOf("product-demo.js") < share.indexOf("share.js"));
   const css = read("assets/product-demo.css"), js = read("assets/product-demo.js");
   assert(css.includes("prefers-reduced-motion: reduce")); assert(css.includes("animation-play-state: paused"));
   assert(css.includes("animation-play-state: running")); assert(css.includes("10s ease-in-out infinite"));
@@ -226,5 +253,5 @@ test("接入只限留白表单页，安全验证居中，高密度页面无演�
   assert(css.slice(css.indexOf("@media (max-width: 1000px)")).includes(".auth-story-with-demo .product-demo { display: none; }"));
   assert(!/(?:#[\da-f]{3,8}\b|rgba?\(|hsla?\(|(?:margin|padding|inset|border)-(?:left|right)\s*:)/i.test(css));
   assert(!/\.value\b|FormData|fetch\(|API\(|innerHTML|setTimeout|setInterval|requestAnimationFrame|mousemove|pointermove/.test(js));
-  assert(!/\b(?:width|height|top|left|margin|padding)\s*:/.test(css.slice(css.indexOf("@keyframes"), css.indexOf("/* 示意图"))));
+  for (const animation of css.matchAll(/@keyframes[\s\S]*?\}\s*\}/g)) assert(!/\b(?:width|height|top|left|margin|padding)\s*:/.test(animation[0]));
 });

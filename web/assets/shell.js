@@ -1,17 +1,63 @@
 (async () => {
   "use strict";
   const { $, el, button, icon, toast, errorText } = UI;
-  const iframe = $("#page-frame");
+  let iframe = $("#page-frame"), frameTimer, frameEpoch = 0, frameUrl = "", frameLoaded = false, frameReady = false, frameFailed = false, disposed = false;
+  const main = $(".app-main"), loading = $("#page-loading"), failure = $("#page-load-error"), announcement = $("#page-announcement");
+  let startupState = "loading";
+  const startupController = new AbortController();
+  const startupActive = () => !disposed && startupState === "loading";
+  function pending() {
+    if (disposed || startupState === "failed") return;
+    frameLoaded = false; frameReady = false; frameFailed = false;
+    main.setAttribute("aria-busy", "true");
+    iframe.classList.add("page-pending"); iframe.inert = true;
+    iframe.setAttribute("aria-hidden", "true");
+    loading.hidden = false; failure.hidden = true;
+    announcement.setAttribute("data-i18n", "loading"); announcement.textContent = I18n.t("loading");
+    clearTimeout(frameTimer);
+    const epoch = frameEpoch;
+    frameTimer = setTimeout(() => { if (!disposed && epoch === frameEpoch) frameFailure("pageLoadTimeout"); }, 20000);
+  }
+  function frameFailure(key = "pageLoadError") {
+    if (frameFailed || disposed) return;
+    frameFailed = true;
+    if (startupState === "loading") { startupState = "failed"; startupController.abort(); }
+    clearTimeout(frameTimer);
+    host?.destroy();
+    main.setAttribute("aria-busy", "false"); loading.hidden = true;
+    iframe.classList.add("page-pending"); iframe.inert = true; iframe.setAttribute("aria-hidden", "true");
+    failure.hidden = false;
+    failure.replaceChildren(el("p", { "data-i18n": key, text: I18n.t(key) }), button("retry", () => startupState === "ready" ? navigate(active, true) : location.reload()));
+    announcement.removeAttribute("data-i18n"); announcement.textContent = "";
+  }
+  function showFrameWhenReady() {
+    if (disposed || frameFailed || !frameLoaded || !frameReady) return;
+    clearTimeout(frameTimer);
+    main.setAttribute("aria-busy", "false"); loading.hidden = true; failure.hidden = true;
+    iframe.classList.remove("page-pending"); iframe.inert = false;
+    iframe.removeAttribute("aria-hidden");
+    announcement.setAttribute("data-i18n", "pageReady"); announcement.textContent = I18n.t("pageReady");
+  }
+  function frameState(state) {
+    if (disposed || frameFailed || startupState !== "ready") return;
+    if (state === "loading") { pending(); return; }
+    if (state === "error") { frameFailure(); return; }
+    if (state !== "ready") return;
+    frameReady = true;
+    showFrameWhenReady();
+  }
   let user = null,
     workspaces = [],
     active = { routeId: "workspace", params: {} },
     navigating = false,
     host;
-  let onboarding = null, onboardingRequest = null;
+  let onboarding = null, onboardingRequest = null, onboardingRefreshAgain = false;
+  const taskFeedback = OnboardingFeedback.create();
   async function refreshOnboarding() {
-    if (!user || user.role === "admin") return;
-    if (onboardingRequest) return onboardingRequest;
-    onboardingRequest = API("onboarding").then((value) => {
+    if (disposed || startupState === "failed" || !user || user.role === "admin") return;
+    if (onboardingRequest) { onboardingRefreshAgain = true; return onboardingRequest; }
+    onboardingRequest = API("onboarding", startupState === "loading" ? { signal: startupController.signal } : undefined).then((value) => {
+      if (disposed || startupState === "failed") return;
       const keys = ["enter_workspace", "create_folder", "upload_file", "preview_file", "create_mcp_key", "mcp_tool_call"];
       if (value?.version !== 1 || typeof value.enabled !== "boolean" || !Array.isArray(value.tasks)) throw new Error("INVALID_RESPONSE");
       if (value.totalCount !== keys.length || value.tasks.length !== keys.length ||
@@ -21,9 +67,13 @@
         value.completedCount !== value.tasks.filter((task) => task.completed).length ||
         value.allComplete !== (value.completedCount === keys.length)) throw new Error("INVALID_RESPONSE");
       onboarding = value;
+      taskFeedback.accept(value);
       renderNav();
-    }).catch(() => { onboarding = null; renderNav(); console.warn("Onboarding status unavailable"); })
-      .finally(() => { onboardingRequest = null; });
+    }).catch(() => { if (disposed || startupState === "failed") return; onboarding = null; renderNav(); console.warn("Onboarding status unavailable"); })
+      .finally(() => {
+        onboardingRequest = null;
+        if (onboardingRefreshAgain) { onboardingRefreshAgain = false; return refreshOnboarding(); }
+      });
     return onboardingRequest;
   }
   window.addEventListener("focus", refreshOnboarding);
@@ -31,20 +81,46 @@
   $("#new-workspace-icon").append(icon("plus"));
   $("#logout-icon").append(icon("logout"));
   async function navigate(payload, skipCheck = false) {
-    if (navigating) return false;
+    if (disposed || startupState !== "ready" || navigating) return false;
     navigating = true;
     try {
       if (!skipCheck && !(await host.request("page.beforeLeave", {})))
         return false;
+      if (disposed || startupState !== "ready") return false;
       if (payload.routeId === "auth") {
         location.href = UI.routeUrl("auth");
         return true;
       }
       if (["users", "settings", "workspace-admin"].includes(payload.routeId) && user?.role !== "admin")
         throw { status: "PERMISSION_DENIED" };
-      const url = UI.routeUrl(payload.routeId, payload.params);
+      if (!["workspace", "account", "onboarding", "users", "settings", "workspace-admin"].includes(payload.routeId)) throw new Error("ROUTE_NOT_ALLOWED");
+      const url = new URL(UI.routeUrl(payload.routeId, payload.params));
+      const session = Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString(16)).join("-");
+      url.searchParams.set("__frame", session);
+      frameUrl = url.href;
       active = payload;
-      iframe.src = url;
+      host?.destroy();
+      const previous = iframe, epoch = ++frameEpoch;
+      iframe = previous.cloneNode(false);
+      iframe.removeAttribute("src");
+      iframe.setAttribute("data-i18n-title", payload.routeId);
+      iframe.title = I18n.t(payload.routeId);
+      pending();
+      host = createHost(session, (state) => { if (epoch === frameEpoch) frameState(state); });
+      iframe.addEventListener("error", () => { if (epoch === frameEpoch) frameFailure(); });
+      // 只认本次目标文档的load；克隆frame清除src后可能产生about:blank load。
+      iframe.addEventListener("load", () => {
+        if (epoch !== frameEpoch || frameFailed) return;
+        try {
+          const loaded = new URL(iframe.contentWindow.location.href), target = new URL(frameUrl);
+          if (loaded.origin !== target.origin || loaded.pathname !== target.pathname || loaded.searchParams.get("__frame") !== session) return;
+        } catch { return; }
+        frameLoaded = true;
+        iframe.dataset.loaded = "true";
+        showFrameWhenReady();
+      });
+      iframe.src = url.href;
+      previous.replaceWith(iframe);
       document.title = `${I18n.t(payload.routeId === "workspace" ? "workspace" : payload.routeId)} · babaShare`;
       renderNav();
       const shellUrl = new URL(location.href);
@@ -62,8 +138,8 @@
       navigating = false;
     }
   }
-  host = AppBridgeHost.create({
-    iframe,
+  function createHost(session, onState) { return AppBridgeHost.create({
+    iframe, session, onState,
     context: () => I18n.ctx,
     handlers: {
       "shell.toast": (payload) => {
@@ -90,7 +166,11 @@
         return true;
       },
     },
-  });
+  }); }
+  window.addEventListener("pageshow", (event) => { if (event.persisted) location.reload(); });
+  host = createHost("", frameState);
+  pending();
+  window.addEventListener("pagehide", () => { disposed = true; startupController.abort(); ++frameEpoch; clearTimeout(frameTimer); host.destroy(); }, { once: true });
   $("#brand-home").addEventListener("click", (event) => {
     if (event.button > 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
@@ -189,14 +269,21 @@
   });
   I18n.apply(I18n.ctx);
   try {
-    const install = await API("install");
+    const install = await API("install", { signal: startupController.signal });
+    if (!startupActive()) return;
     if (install.setupRequired) {
       location.href = UI.routeUrl("auth");
       return;
     }
-    user = await API("me");
-    workspaces = await API("workspaces");
+    const currentUser = await API("me", { signal: startupController.signal });
+    if (!startupActive()) return;
+    user = currentUser;
+    const currentWorkspaces = await API("workspaces", { signal: startupController.signal });
+    if (!startupActive()) return;
+    workspaces = currentWorkspaces;
     await refreshOnboarding();
+    if (!startupActive()) return;
+    startupState = "ready";
     const url = new URL(location.href),
       routeId = ["workspace", "account", "onboarding", "users", "settings", "workspace-admin"].includes(
         url.searchParams.get("route"),
@@ -214,8 +301,9 @@
       true,
     );
   } catch (e) {
-    if (e.httpStatus === 401) return;
+    if (disposed || startupState === "failed" || e.httpStatus === 401) return;
     toast(errorText(e), { kind: "error" });
+    frameFailure();
     renderNav();
   }
 })();

@@ -14,6 +14,14 @@
   margin-inline: auto;
   text-align: start;
 }
+.onboarding-celebration-confetti {
+  position: fixed;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
 .onboarding-celebration .oc-heading { padding-inline: var(--space-6); }
 .onboarding-celebration .oc-eyebrow {
   margin: 0 0 var(--space-2);
@@ -85,21 +93,21 @@
 .onboarding-celebration .oc-brand { flex-shrink: 0; }
 .onboarding-celebration .oc-status { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); margin: 0; }
 
-/* 所有视觉共用十秒单次时间轴，隐藏时统一暂停；终态不保留任何动画。 */
-.onboarding-celebration[data-state="playing"] .oc-document { animation: oc-document 10s ease-in-out both; }
-.onboarding-celebration[data-state="playing"] .oc-fold { animation: oc-fold 10s ease-in-out both; }
-.onboarding-celebration[data-state="playing"] .oc-fold-arm-start { animation: oc-fold-start 10s ease-in-out both; }
-.onboarding-celebration[data-state="playing"] .oc-fold-arm-end { animation: oc-fold-end 10s ease-in-out both; }
-.onboarding-celebration[data-state="playing"] .oc-flight { animation: oc-flight 10s linear both; }
-.onboarding-celebration[data-state="playing"] .oc-plane { animation: oc-plane 10s ease-in-out both; }
-.onboarding-celebration[data-state="playing"] .oc-orbit { animation: oc-orbit 10s ease-in-out both; }
-.onboarding-celebration[data-state="playing"] .oc-star-1 { animation: oc-star-one 10s ease-in-out both; }
-.onboarding-celebration[data-state="playing"] .oc-star-2 { animation: oc-star-two 10s ease-in-out both; }
-.onboarding-celebration[data-state="playing"] .oc-star-3 { animation: oc-star-three 10s ease-in-out both; }
-.onboarding-celebration[data-state="playing"] .oc-star-4 { animation: oc-star-four 10s ease-in-out both; }
-.onboarding-celebration[data-state="playing"] .oc-star-5 { animation: oc-star-five 10s ease-in-out both; }
-.onboarding-celebration[data-state="playing"] .oc-star-6 { animation: oc-star-five 10s ease-in-out both; }
-.onboarding-celebration[data-state="playing"] .oc-keepsake { animation: oc-keepsake 10s ease-in-out both; }
+/* 插画与礼花共用十五秒单次时间轴，隐藏时统一暂停；终态不保留任何动画。 */
+.onboarding-celebration[data-state="playing"] .oc-document { animation: oc-document 15s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-fold { animation: oc-fold 15s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-fold-arm-start { animation: oc-fold-start 15s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-fold-arm-end { animation: oc-fold-end 15s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-flight { animation: oc-flight 15s linear both; }
+.onboarding-celebration[data-state="playing"] .oc-plane { animation: oc-plane 15s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-orbit { animation: oc-orbit 15s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-star-1 { animation: oc-star-one 15s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-star-2 { animation: oc-star-two 15s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-star-3 { animation: oc-star-three 15s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-star-4 { animation: oc-star-four 15s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-star-5 { animation: oc-star-five 15s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-star-6 { animation: oc-star-five 15s ease-in-out both; }
+.onboarding-celebration[data-state="playing"] .oc-keepsake { animation: oc-keepsake 15s ease-in-out both; }
 .onboarding-celebration[data-paused="true"] .oc-scene *, .onboarding-celebration[data-paused="true"] .oc-keepsake { animation-play-state: paused; }
 .onboarding-celebration[data-state="complete"] .oc-document, .onboarding-celebration[data-state="complete"] .oc-fold { opacity: 0; }
 .onboarding-celebration[data-state="complete"] .oc-orbit { opacity: .5; }
@@ -172,6 +180,7 @@
   .onboarding-celebration .oc-message { font-size: var(--font-size-base); }
 }
 @media (prefers-reduced-motion: reduce) {
+  .onboarding-celebration-confetti, .onboarding-celebration .oc-art { display: none; }
   .onboarding-celebration .oc-scene *, .onboarding-celebration .oc-keepsake { animation: none !important; }
   .onboarding-celebration .oc-document, .onboarding-celebration .oc-fold { opacity: 0; }
   .onboarding-celebration .oc-keepsake { opacity: 1; transform: none; }

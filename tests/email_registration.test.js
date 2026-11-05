@@ -201,7 +201,7 @@ test("账户编辑包含完整业务字段、只读审计及三语校验，提�
   const app = runtime("users.html", async (url) => String(url).endsWith("/session/detail") ? result(200, { role: "admin" }) : result(200, [user]));
   app.context.AbortController = AbortController;
   app.load("i18n.js"); app.load("common.js"); app.load("api.js"); app.load("pagination.js");
-  app.context.UI.page = () => ({ ready: Promise.resolve() });
+  app.context.UI.page = () => ({ ready: Promise.resolve(), complete: async () => {}, fail() {} });
   let dialog;
   app.context.UI.formDialog = async (title, fields, submit, options) => { dialog = { title, fields, submit, options }; return null; };
   await app.load("users.js");
@@ -333,7 +333,7 @@ test("共享表单只读字段呈现文字并排除提交值，分组语义不�
   await Promise.resolve(); await Promise.resolve();
   assert.equal(draft.value, "unsaved-password");
   assert.equal(states.at(-1), true);
-  const cancelAction = dirtyForm.children.at(-1).children[1].children[0].events.click();
+  const cancelAction = dirtyForm.children[0].children.at(-1).children[0].events.click();
   const confirm = app.context.document.body.children.at(-1);
   confirm.children.find((child) => child.className === "actions").children[1].events.click();
   await cancelAction;
@@ -348,7 +348,7 @@ test("本人账户列表不提供禁用按钮并展示原因", async () => {
   const app = runtime("users.html", async (url) => String(url).endsWith("/session/detail") ? result(200, self) : result(200, [self, other]));
   app.context.AbortController = AbortController;
   app.load("i18n.js"); app.load("common.js"); app.load("api.js"); app.load("pagination.js");
-  app.context.UI.page = () => ({ ready: Promise.resolve() });
+  app.context.UI.page = () => ({ ready: Promise.resolve(), complete: async () => {}, fail() {} });
   await app.load("users.js");
   const cards = app.get("#user-cards").children;
   const selfNotice = cards[0].children.at(-2);
@@ -378,7 +378,7 @@ test("用户管理仅请求身份与账户列表，不依赖注册或邮件设�
   });
   app.context.AbortController = AbortController;
   app.load("i18n.js"); app.load("common.js"); app.load("api.js"); app.load("pagination.js");
-  app.context.UI.page = () => ({ ready: Promise.resolve() });
+  app.context.UI.page = () => ({ ready: Promise.resolve(), complete: async () => {}, fail() {} });
   await app.load("users.js");
   assert.equal(app.get("#user-cards").children.length, 1);
   assert.equal(app.calls.length, 2);
@@ -396,7 +396,7 @@ async function settingsRuntime({ patchGate = null, mailStatus = 200, role = "adm
     return result(patchStatus, patchStatus === 200 ? { ...initial, ...JSON.parse(options.body) } : { status: "MAIL_NOT_CONFIGURED" });
   }, origin);
   app.load("i18n.js"); app.load("common.js"); app.load("api.js");
-  const bridge = { ready: Promise.resolve(), dirty: false, setDirty(value) { this.dirty = value; } };
+  const bridge = { ready: Promise.resolve(), complete: async () => {}, fail() {}, dirty: false, setDirty(value) { this.dirty = value; } };
   app.context.UI.page = () => bridge;
   app.context.UI.confirm = async () => true;
   const mailFields = app.get("#registration-mail-fields");
@@ -1014,9 +1014,28 @@ test("原邮箱验证后会话失效终止旧流程，提示个人中心重新�
   assert.equal(app.calls.length, count); assert.equal(app.replacements.length, 0);
 });
 
+test("账户首屏等待邮箱数据完成并传播邮箱初始化错误", async () => {
+  for (const failure of [false, true]) {
+    let release;
+    const gate = new Promise((resolve, reject) => { release = failure ? () => reject(new Error("邮箱请求失败")) : () => resolve(result(200, { email: "a@example.com", emailVerified: true, stage: "none" })); });
+    const app = runtime("account.html", async () => gate);
+    app.load("i18n.js"); app.load("common.js"); app.load("api.js");
+    const failures = [];
+    app.context.AppPage = { ready: Promise.resolve(), fail: (error) => failures.push(error.message) };
+    const script = vm.runInContext(fs.readFileSync(path.join(assets, "account-email.js"), "utf8"), app.context);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(app.calls.length, 1);
+    release();
+    await script;
+    assert.deepEqual(failures, failure ? ["邮箱请求失败"] : []);
+    assert.equal(app.get("#account-email-actions").children.length, failure ? 1 : 2);
+    if (failure) assert.notEqual(app.get("#account-email-status").textContent, "");
+  }
+});
+
 test("待新邮箱确认仅可刷新不会误重新开始，重置页缓存恢复显示令牌已失效", async () => {
   const app = runtime("account.html", async () => result(200, { email: "old@example.com", emailVerified: true, stage: "new-pending" }));
-  app.load("i18n.js"); app.load("common.js"); app.load("api.js"); app.context.AppPage = { ready: Promise.resolve() };
+  app.load("i18n.js"); app.load("common.js"); app.load("api.js"); app.context.AppPage = { ready: Promise.resolve(), complete: async () => {}, fail() {} };
   await app.load("account-email.js");
   assert.equal(app.get("#account-email-actions").children.length, 1);
   assert.equal(app.get("#account-email-actions").children[0].dataset.emailAction, "refresh");
@@ -1050,7 +1069,7 @@ test("个人邮箱独立显示与发起，既有邮箱须先验证原邮箱且�
     const app = runtime("account.html", async (url) => String(url).endsWith("/account/email/detail")
       ? result(200, { email: emailVerified ? "old@example.com" : "", emailVerified, stage: "none" }) : result(200, {}));
     app.load("i18n.js"); app.load("common.js"); app.load("api.js");
-    app.context.AppPage = { ready: Promise.resolve() };
+    app.context.AppPage = { ready: Promise.resolve(), complete: async () => {}, fail() {} };
     let dialog;
     app.context.UI.formDialog = async (title, fields, submit) => { dialog = { fields, submit }; return null; };
     await app.load("account-email.js");

@@ -58,6 +58,14 @@
 @keyframes demo-blink { 0%, 43%, 47%, 100% { transform: scaleY(1); } 45% { transform: scaleY(.1); } }
 @keyframes demo-deliver { 0%, 12%, 100% { transform: translate(0, 0) rotate(-6deg); } 44%, 58% { transform: translate(30px, -5px) rotate(5deg); } }
 @keyframes demo-spark { 0%, 25%, 75%, 100% { opacity: .15; } 50% { opacity: .6; } }
+/* 加载场景复用递送人物，独立加速纸张传送，不影响登录捂眼。 */
+.page-loading .page-loading-art { display: block; inline-size: min(100%, 560px); padding: var(--space-6); }
+.page-loading-art .product-demo-scene svg { max-block-size: min(320px, 60dvh); }
+.page-loading-art .demo-character { animation-duration: 2.4s; }
+.page-loading-art .demo-delivery { animation-duration: 2.4s; }
+.product-demo-scene .demo-loader-track { stroke: var(--color-border-strong); stroke-width: 2; }
+.product-demo-scene .demo-loader-sheet { animation: demo-transfer 2.4s ease-in-out infinite; }
+@keyframes demo-transfer { 0% { opacity: 0; transform: translate(0, -12px) rotate(-8deg); } 20%, 75% { opacity: 1; } 100% { opacity: 0; transform: translate(64px, 0) rotate(8deg); } }
 /* 示意图无文本与控件；RTL 仅镜像双方递送的图形。 */
 [dir="rtl"] .product-demo-scene svg { transform: scaleX(-1); }
 @media (max-width: 1000px) {

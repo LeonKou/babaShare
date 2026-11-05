@@ -9,6 +9,7 @@
     <link rel="stylesheet" href="assets/tokens.css" />
     <link rel="stylesheet" href="assets/components.css" />
     <link rel="stylesheet" href="assets/layout.css" />
+    <link rel="stylesheet" href="assets/product-demo.css" />
   </head>
   <body class="app-body">
     <div class="app-shell">
@@ -69,10 +70,17 @@
           </button>
         </div>
       </aside>
-      <main class="app-main">
+      <main class="app-main" aria-busy="true">
+        <div id="page-loading" class="page-loading">
+          <div class="product-demo page-loading-art" data-product-demo data-loading-demo></div>
+        </div>
+        <p id="page-announcement" class="sr-only" role="status" aria-live="polite" data-i18n="loading">正在准备页面</p>
+        <div id="page-load-error" class="page-load-error" role="alert" hidden></div>
         <iframe
           id="page-frame"
-          src="workspace.html"
+          class="page-pending"
+          aria-hidden="true"
+          inert
           allow="fullscreen"
           allowfullscreen
           title="工作区"
@@ -86,6 +94,8 @@
     <script src="assets/app-bridge.js"></script>
     <script src="assets/common.js"></script>
     <script src="assets/api.js"></script>
+    <script src="assets/product-demo.js"></script>
+    <script src="assets/onboarding-feedback.js"></script>
     <script src="assets/shell.js"></script>
   </body>
 </html>

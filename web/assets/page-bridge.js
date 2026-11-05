@@ -4,7 +4,8 @@
     create({ standalone }) {
       let link = null,
         mode = "pending",
-        dirty = false;
+        dirty = false, closed = false;
+      const session = new URL(location.href).searchParams.get("__frame") || "";
       const listeners = new Map(),
         handlers = new Map();
       const ready = (async () => {
@@ -13,18 +14,14 @@
           return standalone.context();
         }
         try {
-          if (document.readyState !== "complete")
-            await new Promise((resolve) =>
-              window.addEventListener("load", resolve, { once: true }),
-            );
-          await new Promise((resolve) => setTimeout(resolve, 0));
           if (parent.location.origin !== location.origin) {
             mode = "standalone";
             return standalone.context();
           }
           link = BabaShareBridgeEndpoint(
             () => parent,
-            () => true,
+            () => !closed,
+            null, session,
           );
           for (const [type, fns] of listeners)
             for (const fn of fns) link.on(type, fn);
@@ -36,7 +33,7 @@
             if (mode === "embedded") I18n.apply(ctx);
           });
           const ctx = await link.request("bridge.hello", {}, 1200);
-          if (mode !== "pending") return standalone.context();
+          if (closed || mode !== "pending") return standalone.context();
           mode = "embedded";
           return I18n.normalizeContext(ctx);
         } catch (e) {
@@ -44,22 +41,22 @@
             console.warn("Bridge handshake failed", e);
           link?.destroy();
           link = null;
-          mode = "standalone";
+          if (!closed) mode = "standalone";
           return standalone.context();
         }
       })();
       const client = {
         ready,
         emit(type, payload) {
+          if (closed) return;
           if (mode === "embedded") link.emit(type, payload);
           else standalone.emit(type, payload);
         },
         request(type, payload) {
-          return ready.then(() =>
-            mode === "embedded"
-              ? link.request(type, payload)
-              : standalone.request(type, payload),
-          );
+          return ready.then(() => {
+            if (closed) throw new Error("BRIDGE_CLOSED");
+            return mode === "embedded" ? link.request(type, payload) : standalone.request(type, payload);
+          });
         },
         on(type, fn) {
           if (!listeners.has(type)) listeners.set(type, new Set());
@@ -87,6 +84,9 @@
           return mode === "embedded";
         },
         destroy() {
+          if (closed) return;
+          if (mode === "embedded") link.emit("page.leaving", { version: 1 });
+          closed = true; mode = "closed";
           link?.destroy();
         },
       };

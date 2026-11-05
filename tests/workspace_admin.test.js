@@ -81,7 +81,7 @@ function pageRealm({ afterTransfer, formDialog } = {}) {
     { id: "disabled", nickname: "Disabled", userName: "disabled", role: "editor", isDisabled: true },
   ];
   const row = { id: "space", workspaceName: "Shared", owner: null, ownerId: null, creatorNickname: "Original", members: [], memberCount: 0, collaboratorCount: 0 };
-  const bridge = { embedded: true, ready: Promise.resolve(), request: async (...args) => events.push(args), emit: (...args) => events.push(args) };
+  const bridge = { embedded: true, ready: Promise.resolve(), complete: async () => {}, fail() {}, request: async (...args) => events.push(args), emit: (...args) => events.push(args) };
   const pager = { pageIndex: 1, pageSize: 20, accept: () => true, reset() { this.pageIndex = 1; }, busy() {} };
   const context = vm.createContext({
     URL, AbortController, console,
@@ -91,7 +91,7 @@ function pageRealm({ afterTransfer, formDialog } = {}) {
     I18n: { t: (key) => key, subscribe() {} },
     LocalPager: () => pager,
     API: async (key, options) => { calls.push({ key, options }); if (key === "workspaceOwnership") await afterTransfer?.({ document, nodes }); return key === "users" ? users : key === "workspaceAdmin" ? { totalCount: 1, totalPage: 1, data: [row] } : {}; },
-    UI: {
+    UI: { loading: (node) => { node.textContent = "loading"; },
       $: (key) => nodes.get(key), el: create,
       button: (key, callback) => create("button", { key, onclick: callback }),
       page: () => bridge, toast() {}, errorText: (error) => error.message,
@@ -112,7 +112,7 @@ async function userRealm({ ids = ["target"], afterDelete, confirm } = {}) {
     window: {}, document, AbortController, console,
     I18n: { t: (key) => key, subscribe() {} },
     LocalPager: () => ({ slice: (items) => items, busy() {}, reset() {} }),
-    UI: { quotaSummary: () => null, $: (selector) => nodes.get(selector), el: create, button: (key, action) => create("button", { key, onclick: action }), formDialog() {}, toast: (text) => notices.push(text), errorText: (error) => error.message, date: () => "", empty: () => create("p"), routeUrl: (route) => route + ".html", confirm: async () => confirm ? confirm({ document, create, nodes }) : true, page: () => ({ ready: Promise.resolve(), embedded: false }) },
+    UI: { loading: (node) => { node.textContent = "loading"; }, quotaSummary: () => null, $: (selector) => nodes.get(selector), el: create, button: (key, action) => create("button", { key, onclick: action }), formDialog() {}, toast: (text) => notices.push(text), errorText: (error) => error.message, date: () => "", empty: () => create("p"), routeUrl: (route) => route + ".html", confirm: async () => confirm ? confirm({ document, create, nodes }) : true, page: () => ({ ready: Promise.resolve(), complete: async () => {}, fail() {}, embedded: false }) },
     API: async (key, options) => { calls.push({ key, options }); if (key === "me") return { id: "admin" }; if (key === "users") return list; if (key === "user" && options.method === "DELETE") { list = list.filter((user) => user.id !== options.query.id); await afterDelete?.({ document, nodes }); return {}; } },
   });
   vm.runInContext(source("assets/users.js"), context);

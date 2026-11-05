@@ -607,7 +607,15 @@ test("共享表单铺满当前文档，初始焦点仍到字段，返回/关闭/
     assert.equal(drawer.getAttribute("aria-labelledby"), drawer.querySelector("h2").id);
     assert.equal(app.document.activeElement, drawer.querySelector("input"));
     assert.equal(app.document.body.style.overflow, "hidden");
-    assert.equal(drawer.querySelector(".form-feedback").parentNode, drawer.querySelector("form"));
+    const form = drawer.querySelector("form"), header = drawer.querySelector("header");
+    const actions = drawer.querySelector(".form-drawer-actions");
+    assert.equal(form.children[0], header);
+    assert.equal(header.parentNode, form);
+    assert.deepEqual(actions.children.map((control) => control.getAttribute("data-i18n") || control.getAttribute("data-i18n-label")), ["cancel", "save", "close"]);
+    assert.equal(actions.children[0].type, "button");
+    assert.equal(actions.children[1].type, "submit");
+    assert.equal(actions.children[2].type, "button");
+    assert.equal(drawer.querySelector(".form-feedback").querySelector("button"), null);
     assert.equal(drawer.querySelector("input").closest(".form-drawer-body") !== null, true);
     app.enter(drawer.querySelector(selector));
     assert.equal(await result, null);
@@ -696,11 +704,23 @@ test("整页表单返回关闭和路径名称三语可读，语言方向和双�
   }
 });
 
-test("整页样式全视口无窄抽屉，正文单独滚动、底栏保留、RTL与减少动画生效", () => {
+test("整页顶部操作栏不随正文滚动，窄屏同排动作、RTL与减少动画生效", () => {
   const css = fs.readFileSync(path.join(assets, "components.css"), "utf8");
   assert.match(css, /dialog\.form-drawer\[open\]\{[^}]*inset:0;[^}]*inline-size:100%;block-size:100%;max-inline-size:none;max-block-size:none/);
   assert.match(css, /\.form-drawer-body\{[^}]*min-block-size:0;[^}]*overflow:auto/);
-  assert.match(css, /\.form-drawer-form>\.form-feedback\{flex-shrink:0/);
+  assert.match(css, /\.form-drawer-header\{[^}]*flex-shrink:0/);
+  const actionsRule = css.match(/dialog\.form-drawer \.form-drawer-actions\{([^}]*)\}/);
+  assert.ok(actionsRule);
+  assert.match(actionsRule[1], /(?:^|;)margin-block-start:0(?:;|$)/);
+  assert.match(actionsRule[1], /(?:^|;)margin-inline-start:auto(?:;|$)/);
+  assert.match(actionsRule[1], /(?:^|;)flex-shrink:0(?:;|$)/);
+  assert.match(actionsRule[1], /(?:^|;)flex-wrap:nowrap(?:;|$)/);
+  assert.match(actionsRule[1], /(?:^|;)align-items:stretch(?:;|$)/);
+  assert.match(actionsRule[1], /(?:^|;)max-inline-size:100%(?:;|$)/);
+  assert.match(css, /\.form-drawer-actions>button\{min-inline-size:0;white-space:normal;overflow-wrap:anywhere\}/);
+  assert.match(css, /@media\(max-width:600px\)\{\.form-drawer-header\{[^}]*flex-wrap:wrap;[^}]*\}\.form-drawer-actions\{flex-basis:100%\}/);
+  assert.match(css, /@media\(max-width:600px\)\{[^\n]*\.form-drawer button\{min-block-size:40px\}\}/);
+  assert.match(css, /\.form-drawer-form>\.form-feedback:has\(>\.status-line:empty\)\{display:none\}/);
   assert.match(css, /html\[dir="rtl"\] \.form-drawer\{--form-drawer-direction:-1\}/);
   assert.match(css, /translateX\(calc\(100% \* var\(--form-drawer-direction\)\)\)/);
   assert.match(css, /@media\(prefers-reduced-motion:reduce\)\{dialog\.form-drawer\[open\]\{animation:none\}\}/);
@@ -814,7 +834,7 @@ test("真实account.js MCP分页键盘翻页重绘保留焦点且隐藏面板不
     const node = app.el(tag, attrs); stack.at(-1).append(node);
     if (!["input", "br", "hr", "img"].includes(tag)) stack.push(node);
   }
-  app.context.UI.page = () => ({ ready: Promise.resolve() });
+  app.context.UI.page = () => ({ ready: Promise.resolve(), complete: async () => {}, fail() {} });
   app.context.API = async (name) => {
     if (name === "me") return { nickname: "测试", userName: "tester", role: "user", createTime: 1 };
     if (name === "shares" || name === "workspaces") return [];
@@ -849,7 +869,7 @@ async function workspaceAdminRuntime({ query = "?userId=editor&relation=member",
     if (!["input", "br", "hr", "img"].includes(tag)) stack.push(node);
   }
   const calls = [];
-  app.context.UI.page = () => ({ ready: Promise.resolve(), embedded: false });
+  app.context.UI.page = () => ({ ready: Promise.resolve(), complete: async () => {}, fail() {}, embedded: false });
   app.context.API = async (key, options) => {
     calls.push({ key, options });
     if (key === "users") return [{ id: "editor", nickname: "Editor", userName: "editor", role: "editor" }];
@@ -969,7 +989,7 @@ async function userRuntime({ disabled = false, afterPatch, afterList, selfId = "
   let users = ["before", "target", "after"].map((id) => ({ id, nickname: id, userName: id, role: "editor", isDisabled: disabled, createTime: 1 }));
   const calls = [];
   let lists = 0;
-  app.context.UI.page = () => ({ ready: Promise.resolve(), embedded: false });
+  app.context.UI.page = () => ({ ready: Promise.resolve(), complete: async () => {}, fail() {}, embedded: false });
   app.context.API = async (key, options) => {
     calls.push({ key, options });
     if (key === "me") return { id: selfId };
@@ -993,7 +1013,7 @@ async function userRuntime({ disabled = false, afterPatch, afterList, selfId = "
     const form = app.$("dialog form");
     form.elements.namedItem("role").value = "editor";
     form.elements.namedItem("isDisabled").value = String(disabled);
-    const save = form.querySelectorAll("button").at(-1);
+    const save = form.querySelectorAll("button").find((control) => control.type === "submit");
     save.focus();
     app.enter(save);
     await settleUsers();

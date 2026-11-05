@@ -6,6 +6,7 @@
     let visible = !window.IntersectionObserver;
     let suspended = false, disposed = false, covered = false;
     const passwordDemo = root.id === "auth-product-demo";
+    const loadingDemo = root.dataset.loadingDemo !== undefined;
     const cleanups = [];
     const armPoses = [];
     function drawArm(parent, tone, sleeve, hand, coveredSleeve, coveredHand) {
@@ -66,6 +67,14 @@
       "M327 129Q311 107 332 98", "M332 98L332 88");
     drawArm(receiver, "neutral", "M357 130Q379 146 364 162", "M364 162L358 166",
       "M357 130Q373 107 343 99", "M343 99L343 89");
+    if (loadingDemo) {
+      svgNode("path", { class: "demo-loader-track", d: "M182 166H295M182 174H295" }, svg);
+      for (let index = 0; index < 3; index++) {
+        const sheet = svgNode("g", { class: "demo-loader-sheet", style: `animation-delay:${-index * 0.8}s` }, svg);
+        svgNode("path", { class: "demo-card", d: "M192 132H213L221 140V160H192ZM213 132V140H221" }, sheet);
+        svgNode("path", { class: "demo-smile", d: "M198 146H214M198 152H209" }, sheet);
+      }
+    }
     const card = svgNode("g", { class: "demo-delivery" }, svg);
     svgNode("path", { class: "demo-card", d: "M201 91H239L249 101V141H201ZM239 91V101H249" }, card);
     svgNode("circle", { class: "demo-card-sun", cx: 213, cy: 106, r: 3 }, card);
@@ -75,7 +84,7 @@
     root.setAttribute("aria-hidden", "true");
     root.replaceChildren(scene);
     function sync() {
-      root.dataset.running = String(!disposed && !covered && !reduced.matches && !compact.matches && !document.hidden && !suspended && visible);
+      root.dataset.running = String(!disposed && !covered && !reduced.matches && (!compact.matches || loadingDemo) && !document.hidden && !suspended && visible);
     }
     if (passwordDemo) {
       root.setPasswordCovered = (value) => {

@@ -147,7 +147,7 @@
     controller = new AbortController();
     const current = ++requestId;
     $("#account-status").classList.remove("error");
-    $("#account-status").textContent = I18n.t("loading");
+    UI.loading($("#account-status"));
     $("#profile-summary").setAttribute("aria-busy", "true");
     $("#share-cards").setAttribute("aria-busy", "true");
     pager.busy(true);
@@ -159,10 +159,13 @@
       ]);
       if (current !== requestId) return;
       [me, shares, workspaces] = data;
+      await window.OnboardingFeedback?.connect(bridge, me);
       render();
       $("#account-status").textContent = "";
     } catch (e) {
-      if (e.name === "AbortError") return;
+      if (e.name === "AbortError" || current !== requestId) return;
+      bridge.fail(e);
+      $("#share-empty").hidden = true;
       $("#account-status").classList.add("error");
       $("#account-status").textContent = errorText(e);
       $("#account-status").append(button("retry", load));
@@ -266,7 +269,7 @@
     const current = ++keyRequest;
     keyBusy = true;
     $("#mcp-status").classList.remove("error");
-    $("#mcp-status").replaceChildren(I18n.t("loading"));
+    UI.loading($("#mcp-status"));
     $("#mcp-cards").setAttribute("aria-busy", "true");
     keyPager.busy(true);
     renderKeys();
@@ -278,6 +281,7 @@
       $("#mcp-status").replaceChildren();
     } catch (error) {
       if (error.name === "AbortError" || current !== keyRequest) return;
+      bridge.fail(error);
       $("#mcp-status").classList.add("error");
       $("#mcp-status").replaceChildren(keyError(error), button("retry", loadKeys));
     } finally {
@@ -382,6 +386,8 @@
           const keyId = result.id;
           delete result.key;
           keys.unshift(result);
+          if (bridge.embedded) bridge.request("onboarding.changed", { version: 1 }).catch((error) => console.warn("Onboarding refresh failed", error));
+          else window.OnboardingFeedback?.refresh();
           await McpHelp.showCreated(keyId, (error) => toast(keyError(error), { kind: "error" }));
           await loadKeys();
         } catch (error) {
@@ -406,5 +412,8 @@
   $("#mcp-filter").addEventListener("change", () => { keyPager.reset(); renderKeys(); });
   I18n.subscribe(() => { render(); renderKeys(); });
   await bridge.ready;
-  await Promise.all([load(), loadKeys()]);
+  if (document.readyState === "loading")
+    await new Promise((resolve) => document.addEventListener("DOMContentLoaded", resolve, { once: true }));
+  await Promise.all([load(), loadKeys(), window.AccountEmailReady]);
+  await bridge.complete();
 })();

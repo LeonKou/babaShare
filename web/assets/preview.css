@@ -10,6 +10,7 @@
 }
 .file-preview-download { padding: var(--space-2) var(--space-4); color: var(--color-text-primary); text-decoration: underline; text-decoration-color: var(--color-primary); text-underline-offset: 4px; }
 .file-preview > .status-line { padding: var(--space-2) var(--space-4); margin: 0; }
+.file-preview > .status-line:empty { display: none; }
 .file-preview [hidden] { display: none; }
 .file-preview-body { display: flex; min-block-size: 0; min-inline-size: 0; flex: 1; overflow: auto; }
 .file-preview-body > .preview-frame { inline-size: 100%; block-size: 100%; min-block-size: 240px; border: 0; flex: 1; }
@@ -91,13 +92,48 @@ dialog.file-preview-page::backdrop { background: var(--color-bg-page); }
 .code-preview-main { display: flex; flex-direction: column; block-size: 100%; min-block-size: 0; }
 .code-preview-editor { flex: 1; min-block-size: 0; min-inline-size: 0; }
 .file-preview :focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: -2px; }
-.share-stage > .file-preview { min-block-size: 0; }
+.file-preview-body.file-preview-pending { visibility: hidden; pointer-events: none; }
+.file-preview-retry { align-self: flex-start; margin: var(--space-2) var(--space-4); }
+.share-preview-area { position: relative; display: flex; flex-direction: column; flex: 1; min-inline-size: 0; min-block-size: 0; }
+.share-preview-area > .file-preview { min-block-size: 0; }
+.share-preview-area > .page-loading { overflow: hidden; }
 html[data-share-view="file"] :is(.share-topbar, .share-sidebar, .preview-bar),
 .share-file-view :is(.share-topbar, .share-sidebar, .preview-bar, .share-tree-edge) { display: none; }
 .share-file-view .share-layout { display: block; position: relative; min-block-size: 0; }
 .share-file-view .share-stage { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; }
 .share-file-view .file-preview-body > .preview-frame { min-block-size: 0; }
-.share-file-view #share-status:empty, .share-file-view .file-preview > .status-line:empty { display: none; }
+.share-stage .preview-bar { background: var(--color-bg-surface); align-items: flex-start; gap: var(--space-4); }
+.share-preview-heading { display: flex; flex: 1; align-items: flex-start; gap: var(--space-4); min-inline-size: min(100%, 240px); }
+.share-file-heading { flex: 1; min-inline-size: 0; }
+.share-file-heading .share-title { margin: 0; font-size: var(--font-size-lg); line-height: var(--line-height); overflow-wrap: anywhere; }
+.share-file-meta { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-2); margin-block-start: var(--space-1); }
+.share-file-type { flex-shrink: 0; padding-inline: var(--space-1); background: var(--color-bg-page); color: var(--color-text-secondary); overflow-wrap: anywhere; max-inline-size: 100%; }
+.share-file-meta p { min-inline-size: 0; margin: 0; overflow-wrap: anywhere; }
+.share-file-meta p:empty { display: none; }
+#preview-actions { flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
+#preview-actions [hidden] { display: none; }
+.share-sidebar h2 { margin-block-end: var(--space-2); font-size: var(--font-size-lg); }
+#share-expiry { margin-block: 0 var(--space-4); overflow-wrap: anywhere; }
+.file-tree .share-file-row .icon { flex-shrink: 0; }
+.file-tree .share-file-row > button > span { min-inline-size: 0; }
+@media (max-width: 760px) {
+  .share-topbar > .actions { flex-wrap: wrap; min-inline-size: 0; }
+  #share-controls { flex-wrap: wrap; }
+  #share-controls select { max-inline-size: 120px; }
+  .share-preview-heading { flex-basis: 100%; }
+  #preview-actions { inline-size: 100%; justify-content: flex-start; }
+}
+@media (max-width: 520px) {
+  .share-layout:not(.tree-collapsed) { grid-template-rows: minmax(0, min(28dvh, 200px)) minmax(0, 1fr); }
+  .share-sidebar { min-block-size: 0; max-block-size: none; border-inline-end: 0; padding: var(--space-3); }
+  .share-stage .preview-bar { padding: var(--space-2) var(--space-3); gap: var(--space-2); }
+  .share-preview-heading { gap: var(--space-2); }
+  #preview-actions > :is(button, a) { flex: 1; white-space: normal; overflow-wrap: anywhere; }
+  .share-file-meta p { display: none; }
+}
+@media (pointer: coarse) {
+  #share-navigation button, #preview-actions > :is(button, a), .file-tree .share-file-row > button { min-block-size: 40px; }
+}
 .file-tree .share-file-row { display: flex; align-items: center; gap: var(--space-1); min-inline-size: 0; }
 .file-tree .share-file-row > button { flex: 1; min-inline-size: 0; color: var(--color-menu-text); }
 .file-tree .share-file-row > button:hover { background: var(--color-menu-hover-bg); color: var(--color-menu-hover-text); }
